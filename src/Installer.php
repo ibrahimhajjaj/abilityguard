@@ -69,6 +69,7 @@ final class Installer {
 			invocation_id char(36) NOT NULL,
 			ability_name varchar(191) NOT NULL,
 			caller_type varchar(20) NOT NULL DEFAULT 'internal',
+			caller_id varchar(191) NULL,
 			user_id bigint(20) unsigned NOT NULL DEFAULT 0,
 			args_json longtext NULL,
 			result_json longtext NULL,
@@ -84,7 +85,8 @@ final class Installer {
 			KEY ability_name (ability_name),
 			KEY user_id (user_id),
 			KEY created_at (created_at),
-			KEY status (status)
+			KEY status (status),
+			KEY caller_id (caller_id)
 		) {$charset_collate};";
 
 		$sql[] = "CREATE TABLE {$log_meta} (

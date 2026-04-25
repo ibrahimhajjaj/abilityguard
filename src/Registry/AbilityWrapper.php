@@ -80,11 +80,15 @@ final class AbilityWrapper {
 				$this->snapshots->capture_post( $snapshot['snapshot_id'], $this->safety, $input );
 			}
 
+			$mcp_id      = McpContext::current();
+			$caller_type = null !== $mcp_id ? 'mcp' : self::detect_caller_type();
+
 			$this->audit->log(
 				array(
 					'invocation_id' => $invocation_id,
 					'ability_name'  => $this->ability_name,
-					'caller_type'   => self::detect_caller_type(),
+					'caller_type'   => $caller_type,
+					'caller_id'     => $mcp_id,
 					'user_id'       => self::current_user_id(),
 					'args_json'     => self::encode_or_null( $input ),
 					'result_json'   => $thrown ? null : self::encode_or_null( $result ),

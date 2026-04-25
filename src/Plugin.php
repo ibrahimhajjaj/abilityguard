@@ -36,6 +36,8 @@ final class Plugin {
 
 		Installer::maybe_upgrade();
 
+		Registry\McpContext::register();
+
 		$registration = new Registry\RegistrationFilter(
 			new Snapshot\SnapshotService( new Snapshot\SnapshotStore() ),
 			new Audit\AuditLogger()

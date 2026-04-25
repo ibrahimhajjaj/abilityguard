@@ -28,10 +28,15 @@ final class AuditLogger implements AuditLoggerInterface {
 		global $wpdb;
 		$table = Installer::table( 'log' );
 
+		$caller_id = isset( $entry['caller_id'] ) && is_string( $entry['caller_id'] ) && '' !== $entry['caller_id']
+			? $entry['caller_id']
+			: null;
+
 		$row     = array(
 			'invocation_id' => (string) $entry['invocation_id'],
 			'ability_name'  => (string) $entry['ability_name'],
 			'caller_type'   => (string) ( $entry['caller_type'] ?? 'internal' ),
+			'caller_id'     => $caller_id,
 			'user_id'       => (int) ( $entry['user_id'] ?? 0 ),
 			'args_json'     => $entry['args_json'] ?? null,
 			'result_json'   => $entry['result_json'] ?? null,
@@ -43,7 +48,7 @@ final class AuditLogger implements AuditLoggerInterface {
 			'snapshot_id'   => isset( $entry['snapshot_id'] ) ? (int) $entry['snapshot_id'] : null,
 			'created_at'    => current_time( 'mysql', true ),
 		);
-		$formats = array( '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%s' );
+		$formats = array( '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%s' );
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$ok = $wpdb->insert( $table, $row, $formats );

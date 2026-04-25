@@ -52,7 +52,7 @@ class LogRepository {
 	 * List rows with optional filters.
 	 *
 	 * Recognised keys in $filters: ability_name, user_id, status, destructive,
-	 * per_page (1..500, default 50), offset (default 0).
+	 * caller_id, per_page (1..500, default 50), offset (default 0).
 	 *
 	 * @param array<string, mixed> $filters Filters.
 	 *
@@ -79,6 +79,10 @@ class LogRepository {
 		if ( isset( $filters['destructive'] ) ) {
 			$where[]  = 'destructive = %d';
 			$params[] = $filters['destructive'] ? 1 : 0;
+		}
+		if ( isset( $filters['caller_id'] ) && is_string( $filters['caller_id'] ) && '' !== $filters['caller_id'] ) {
+			$where[]  = 'caller_id = %s';
+			$params[] = $filters['caller_id'];
 		}
 
 		$per_page = isset( $filters['per_page'] ) ? max( 1, min( 500, (int) $filters['per_page'] ) ) : 50;
