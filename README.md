@@ -48,6 +48,14 @@ wp_register_ability( 'my-plugin/update-product-price', array(
 - **WP-CLI** - `wp abilityguard log list/show`, `wp abilityguard rollback <id>`, `wp abilityguard approval list/approve/reject <id>`, `wp abilityguard prune`.
 - **wp-admin** - Tools → AbilityGuard. Hybrid timeline + command-palette search + per-day pagination, snapshot drawer, JSON-highlighted Input/Result tabs, real rollback against the captured snapshot.
 
+## Documentation
+
+Plugin-author guides live in `docs/`:
+
+- [docs/safety-config.md](docs/safety-config.md) - Adding the safety config to your ability: full schema reference, snapshot resolver forms, all five surfaces, redaction, payload caps, and common mistakes.
+- [docs/approval-workflow.md](docs/approval-workflow.md) - Approval queue: when to use `requires_approval`, the approve/reject lifecycle, CLI commands, and integration recipes.
+- [docs/custom-collectors.md](docs/custom-collectors.md) - Writing your own collector: the `CollectorInterface` contract, a worked example, current extensibility limits, and testing patterns.
+
 ## Reference plugins
 
 `examples/abilityguard-woocommerce-pack/` and `examples/abilityguard-fluent-forms-pack/` - minimal third-party plugins that depend on AbilityGuard and demonstrate the `safety` config pattern. Each ships with its own integration test.
