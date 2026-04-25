@@ -137,6 +137,61 @@ add_action(
 
 ---
 
+## WhatsApp (Cloud API)
+
+WhatsApp is the dominant notification channel in much of the world (MENA, India, Latin America). Use Meta's official **Cloud API** - HTTP-only, no Baileys session, free for the first 1,000 service conversations per month.
+
+Set up a Meta Business account, register a phone number, get a permanent access token + phone number id from <https://developers.facebook.com/apps>. Then create a [message template](https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates) named `abilityguard_approval` with body parameters: `{{ability}}`, `{{invocation}}`, `{{review_url}}`.
+
+```php
+add_action(
+    'abilityguard_approval_requested',
+    function ( int $approval_id, string $ability_name, int $log_id, mixed $input, string $invocation_id ): void {
+        $approver_phones = array( '+201234567890' ); // E.164, no spaces
+        $payload         = array(
+            'messaging_product' => 'whatsapp',
+            'to'                => null, // filled per recipient
+            'type'              => 'template',
+            'template'          => array(
+                'name'     => 'abilityguard_approval',
+                'language' => array( 'code' => 'en' ),
+                'components' => array( array(
+                    'type'       => 'body',
+                    'parameters' => array(
+                        array( 'type' => 'text', 'text' => $ability_name ),
+                        array( 'type' => 'text', 'text' => $invocation_id ),
+                        array( 'type' => 'text', 'text' => abilityguard_approval_url( $approval_id ) ),
+                    ),
+                ) ),
+            ),
+        );
+
+        foreach ( $approver_phones as $phone ) {
+            $payload['to'] = $phone;
+            wp_remote_post(
+                'https://graph.facebook.com/v20.0/' . WHATSAPP_PHONE_NUMBER_ID . '/messages',
+                array(
+                    'headers' => array(
+                        'Authorization' => 'Bearer ' . WHATSAPP_ACCESS_TOKEN,
+                        'Content-Type'  => 'application/json',
+                    ),
+                    'body'    => wp_json_encode( $payload ),
+                    'timeout' => 5,
+                )
+            );
+        }
+    },
+    10,
+    5
+);
+```
+
+> **Template requirement.** WhatsApp's policy requires pre-approved templates for business-initiated messages outside a 24-hour customer-service window. The recipe above uses a template; for replies inside that window you can send free-form text. See Meta's docs for the policy details.
+
+> **Self-hosted Baileys variant.** If you run a private deployment with a Baileys-based CLI (e.g. [wu-cli](https://github.com/ibrahimhajjaj/wu-cli) - `npm i -g @ibrahimwithi/wu-cli`), you can shell out instead of using the Cloud API. Replace the `wp_remote_post()` block with `shell_exec( 'wu messages send ' . escapeshellarg($phone) . ' ' . escapeshellarg($body) )`. **Don't ship this in a public plugin** - it requires a logged-in WhatsApp session on the server. Personal/internal use only.
+
+---
+
 ## Microsoft Teams
 
 Teams expects an Adaptive Card payload:
