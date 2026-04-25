@@ -84,6 +84,12 @@ composer env:stop
 
 `wp-env` is pinned to **dev: 18888 / tests: 18889** so this project doesn't collide with other wp-env projects you might run on 8888.
 
+### Canonical slug
+
+The plugin's canonical slug is **`abilityguard`** (lowercase) - that's what the release zip ships, what wp.org expects, and what dependent plugins should declare in `Requires Plugins: abilityguard`.
+
+Your local clone folder may be named `AbilityGuard/` (capital A) or `abilityguard/`; `.wp-env.json` mounts the working tree under `wp-content/plugins/abilityguard` regardless via `mappings`, so dependents that declare `Requires Plugins: abilityguard` activate cleanly in dev. The plugin is auto-activated on `wp-env start` via `lifecycleScripts.afterStart`.
+
 The integration suite is the primary correctness source - 54 tests covering installer schema, snapshot/audit/rollback round-trip, the approval queue, all five collectors, retention pruning, MCP identity, the post-state diff path, and both example plugins.
 
 If you use Claude Code worktrees, drop a local `phpcs.xml` (not committed) so PHPCS doesn't scan `.claude/`:

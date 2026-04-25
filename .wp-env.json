@@ -3,12 +3,13 @@
 	"phpVersion": "8.3",
 	"port": 18888,
 	"testsPort": 18889,
-	"plugins": [
-		".",
-		"./lab/abilities-api"
-	],
+	"plugins": [],
 	"mappings": {
+		"wp-content/plugins/abilityguard": ".",
 		"wp-content/plugins/mcp-adapter": "./tests/fixtures/mcp-adapter"
+	},
+	"lifecycleScripts": {
+		"afterStart": "wp-env run cli wp plugin activate abilityguard && wp-env run tests-cli wp plugin activate abilityguard"
 	},
 	"config": {
 		"WP_DEBUG": true,

@@ -20,6 +20,44 @@ That is the minimum. AbilityGuard will capture `my_plugin_setting` before execut
 
 ---
 
+## Prerequisite: register a category before your abilities
+
+The Abilities API requires every ability to belong to a registered category. If the category in your `safety`-bearing registration doesn't exist yet, the registration fails silently - `wp_get_ability( 'my-plugin/x' )` returns `null` with a `_doing_it_wrong` notice in the debug log.
+
+Register your category once, on `wp_abilities_api_categories_init`, before any `wp_register_ability()` call:
+
+```php
+add_action( 'wp_abilities_api_categories_init', static function ( $registry ): void {
+    $registry->register( 'my-plugin', array(
+        'label'       => 'My Plugin',
+        'description' => 'Abilities exposed by My Plugin.',
+    ) );
+} );
+```
+
+Then use that category slug in every ability's `category` field. You can put both action callbacks (categories + abilities) in the same plugin file - order doesn't matter, but the category must be REGISTERED on its action before any ability that uses it.
+
+---
+
+## Testing your ability via wp-cli
+
+`wp eval` and `wp eval-file` run with no current user. If your `permission_callback` checks a capability (it should), the ability will refuse to run with `"does not have necessary permission"`. Set the current user explicitly in test scripts:
+
+```bash
+wp eval '
+    $admin = get_users(["role" => "administrator", "number" => 1])[0];
+    wp_set_current_user( $admin->ID );
+
+    $ability = wp_get_ability( "my-plugin/do-something" );
+    $result  = $ability->execute( ["foo" => "bar"] );
+    var_dump( $result );
+'
+```
+
+Same applies to direct PHP scripts run via cron, queue workers, or any context that doesn't pass through the REST stack.
+
+---
+
 ## Full `safety` config schema
 
 | Key | Type | Default | Description |
