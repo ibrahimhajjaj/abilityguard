@@ -17,6 +17,7 @@ use AbilityGuard\Snapshot\Collector\PostMetaCollector;
 use AbilityGuard\Snapshot\Collector\TaxonomyCollector;
 use AbilityGuard\Snapshot\Collector\UserRoleCollector;
 use AbilityGuard\Snapshot\SnapshotStore;
+use AbilityGuard\Support\Redactor;
 use WP_Error;
 
 /**
@@ -52,11 +53,18 @@ final class RollbackService {
 	 *
 	 * Accepts either a numeric log id or an invocation_id (uuid).
 	 *
+	 * When the snapshot contains redacted values (sentinel '[redacted]'), those
+	 * individual keys are skipped during restore. If any keys are skipped the
+	 * method returns WP_Error 'abilityguard_rollback_partial' listing the
+	 * affected surface/key pairs. Pass $force = true to mark the invocation as
+	 * rolled-back anyway even when keys were skipped.
+	 *
 	 * @param int|string $reference Log id or invocation uuid.
+	 * @param bool       $force     Mark rolled-back even if some keys were skipped.
 	 *
 	 * @return true|WP_Error
 	 */
-	public function rollback( $reference ) {
+	public function rollback( $reference, bool $force = false ) {
 		$log = $this->resolve_log( $reference );
 		if ( null === $log ) {
 			return new WP_Error( 'abilityguard_log_not_found', 'No audit row matched the reference.' );
@@ -70,11 +78,38 @@ final class RollbackService {
 			return new WP_Error( 'abilityguard_snapshot_missing', 'No snapshot stored for this invocation.' );
 		}
 
+		$skipped = array(); // Track keys that could not be restored due to redaction.
+
 		foreach ( $snapshot['surfaces'] as $surface => $captured ) {
 			if ( ! isset( $this->collectors[ $surface ] ) || ! is_array( $captured ) ) {
 				continue;
 			}
-			$this->collectors[ $surface ]->restore( $captured );
+
+			// Strip redacted entries; collect them in $skipped for the partial report.
+			$restorable = array();
+			foreach ( $captured as $key => $entry ) {
+				if ( $this->surface_entry_is_redacted( $entry ) ) {
+					$skipped[] = "{$surface}.{$key}";
+				} else {
+					$restorable[ $key ] = $entry;
+				}
+			}
+
+			if ( array() !== $restorable ) {
+				$this->collectors[ $surface ]->restore( $restorable );
+			}
+		}
+
+		if ( array() !== $skipped && ! $force ) {
+			return new WP_Error(
+				'abilityguard_rollback_partial',
+				sprintf(
+					'Rollback incomplete: %d key(s) were redacted at snapshot time and cannot be restored: %s. Pass force=true to mark rolled-back anyway.',
+					count( $skipped ),
+					implode( ', ', $skipped )
+				),
+				array( 'skipped_keys' => $skipped )
+			);
 		}
 
 		$this->logs->update_status( (int) $log['id'], 'rolled_back' );
@@ -82,6 +117,21 @@ final class RollbackService {
 		do_action( 'abilityguard_rollback', $log, $snapshot );
 
 		return true;
+	}
+
+	/**
+	 * Determine whether a surface entry value is a redaction sentinel.
+	 *
+	 * Surface entries are stored as associative arrays keyed by meta-key or
+	 * option name. We consider an entry "redacted" when its stored value IS the
+	 * sentinel string - meaning the entire scalar value was replaced.
+	 *
+	 * @param mixed $entry A single value from the captured surface array.
+	 *
+	 * @return bool
+	 */
+	private function surface_entry_is_redacted( mixed $entry ): bool {
+		return Redactor::SENTINEL === $entry;
 	}
 
 	/**

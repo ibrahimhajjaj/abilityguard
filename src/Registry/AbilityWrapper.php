@@ -16,6 +16,7 @@ use AbilityGuard\Contracts\SnapshotServiceInterface;
 use AbilityGuard\Support\Hash;
 use AbilityGuard\Support\Json;
 use AbilityGuard\Support\PayloadCap;
+use AbilityGuard\Support\Redactor;
 use Throwable;
 use WP_Error;
 
@@ -73,7 +74,7 @@ final class AbilityWrapper {
 						'ability_name'  => $this->ability_name,
 						'caller_type'   => self::detect_caller_type(),
 						'user_id'       => self::current_user_id(),
-						'args_json'     => self::encode_or_null( $input ),
+						'args_json'     => self::encode_or_null( $this->redact_value( $input, 'input' ) ),
 						'result_json'   => null,
 						'status'        => 'pending',
 						'destructive'   => $destructive,
@@ -122,8 +123,15 @@ final class AbilityWrapper {
 			$mcp_id      = McpContext::current();
 			$caller_type = null !== $mcp_id ? 'mcp' : self::detect_caller_type();
 
-			$args_json   = self::encode_or_null( $input );
-			$result_json = $thrown ? null : self::encode_or_null( $result );
+			// Hash BEFORE redaction so hashes reflect real values.
+			$post_hash     = self::hash_or_null( $result );
+			$logged_input  = $this->redact_value( $input, 'input' );
+			$logged_result = $thrown ? null : $this->redact_value( $result, 'result' );
+
+			// Encode → cap. Caps run on the JSON-encoded (redacted) form so
+			// truncation marker reflects what's actually being stored.
+			$args_json   = self::encode_or_null( $logged_input );
+			$result_json = $thrown ? null : self::encode_or_null( $logged_result );
 
 			$args_limit   = self::resolve_payload_limit( $this->safety, 'abilityguard_max_args_bytes', 65536 );
 			$result_limit = self::resolve_payload_limit( $this->safety, 'abilityguard_max_result_bytes', 131072 );
@@ -148,7 +156,7 @@ final class AbilityWrapper {
 					'destructive'   => $destructive,
 					'duration_ms'   => $duration_ms,
 					'pre_hash'      => $snapshot['pre_hash'],
-					'post_hash'     => self::hash_or_null( $result ),
+					'post_hash'     => $post_hash,
 					'snapshot_id'   => $snapshot['snapshot_id'],
 				)
 			);
@@ -242,6 +250,43 @@ final class AbilityWrapper {
 				'0.3.0'
 			);
 		}
+	}
+
+	/**
+	 * Apply redaction to a value before logging.
+	 *
+	 * Safety.scrub callable wins. Otherwise: global default keys + filter +
+	 * per-ability `safety.redact[$kind]` paths feed Redactor::redact().
+	 *
+	 * @param mixed  $value Value to redact (input or result).
+	 * @param string $kind  'input' or 'result'.
+	 * @return mixed Redacted value.
+	 */
+	private function redact_value( mixed $value, string $kind ): mixed {
+		if ( ! empty( $this->safety['scrub'] ) && is_callable( $this->safety['scrub'] ) ) {
+			return ( $this->safety['scrub'] )( $value, $kind );
+		}
+
+		$default_keys = Redactor::default_keys();
+		$global_keys  = function_exists( 'apply_filters' )
+			? (array) apply_filters( 'abilityguard_redact_keys', $default_keys, $kind )
+			: $default_keys;
+
+		$ability_paths = array();
+		if ( isset( $this->safety['redact'][ $kind ] ) && is_array( $this->safety['redact'][ $kind ] ) ) {
+			$ability_paths = $this->safety['redact'][ $kind ];
+		}
+
+		$all_paths = array_values( array_unique( array_merge( $global_keys, $ability_paths ) ) );
+		if ( array() === $all_paths ) {
+			return $value;
+		}
+
+		$placeholder = function_exists( 'apply_filters' )
+			? (string) apply_filters( 'abilityguard_redaction_placeholder', Redactor::SENTINEL )
+			: Redactor::SENTINEL;
+
+		return Redactor::redact( $value, $all_paths, $placeholder );
 	}
 
 	/**

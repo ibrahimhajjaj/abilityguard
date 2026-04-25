@@ -18,6 +18,7 @@ use AbilityGuard\Snapshot\Collector\TaxonomyCollector;
 use AbilityGuard\Snapshot\Collector\UserRoleCollector;
 use AbilityGuard\Support\Hash;
 use AbilityGuard\Support\PayloadCap;
+use AbilityGuard\Support\Redactor;
 
 /**
  * Resolves a per-invocation snapshot spec, runs each collector, persists
@@ -81,22 +82,25 @@ final class SnapshotService implements SnapshotServiceInterface {
 			$surfaces[ $surface ] = $this->collectors[ $surface ]->collect( $surface_spec );
 		}
 
-		// Hash BEFORE truncation so integrity is preserved.
+		// Hash BEFORE redaction + truncation so integrity is preserved.
 		$pre_hash = Hash::stable( $surfaces );
 
+		// Redact secret values, then cap for size. Both before storage.
+		$redacted  = $this->redact_surfaces( $surfaces, $safety );
 		$cap_limit = $this->resolve_snapshot_limit( $safety );
-		$capped    = PayloadCap::cap_surfaces( $surfaces, $cap_limit );
+		$capped    = PayloadCap::cap_surfaces( $redacted, $cap_limit );
 
 		if ( array() !== $capped['truncated'] ) {
 			$this->maybe_doing_it_wrong_snapshot( $safety );
 		}
 
-		$snapshot_id = $this->store->insert( $invocation_id, $capped['surfaces'], $pre_hash );
+		$stored_surfaces = $capped['surfaces'];
+		$snapshot_id     = $this->store->insert( $invocation_id, $stored_surfaces, $pre_hash );
 
 		return array(
 			'pre_hash'    => $pre_hash,
 			'snapshot_id' => $snapshot_id,
-			'surfaces'    => $capped['surfaces'],
+			'surfaces'    => $stored_surfaces,
 		);
 	}
 
@@ -128,8 +132,9 @@ final class SnapshotService implements SnapshotServiceInterface {
 			$surfaces[ $surface ] = $this->collectors[ $surface ]->collect( $surface_spec );
 		}
 
+		$redacted  = $this->redact_surfaces( $surfaces, $safety );
 		$cap_limit = $this->resolve_snapshot_limit( $safety );
-		$capped    = PayloadCap::cap_surfaces( $surfaces, $cap_limit );
+		$capped    = PayloadCap::cap_surfaces( $redacted, $cap_limit );
 
 		if ( array() !== $capped['truncated'] ) {
 			$this->maybe_doing_it_wrong_snapshot( $safety );
@@ -171,6 +176,53 @@ final class SnapshotService implements SnapshotServiceInterface {
 				'0.3.0'
 			);
 		}
+	}
+
+	/**
+	 * Apply surface-level redaction to captured surfaces before storing.
+	 *
+	 * Redaction trade-off (v0.3): storing the sentinel means rollback cannot
+	 * restore redacted keys. RollbackService detects '[redacted]' values and
+	 * skips them, returning WP_Error 'abilityguard_rollback_partial' unless
+	 * the caller passes force=true.
+	 *
+	 * @param array<string, mixed> $surfaces Raw captured surfaces.
+	 * @param array<string, mixed> $safety   Safety config.
+	 *
+	 * @return array<string, mixed> Surfaces with sensitive values replaced.
+	 */
+	private function redact_surfaces( array $surfaces, array $safety ): array {
+		$default_keys = Redactor::default_keys();
+		$global_keys  = function_exists( 'apply_filters' )
+			? (array) apply_filters( 'abilityguard_redact_keys', $default_keys, 'surfaces' )
+			: $default_keys;
+
+		$placeholder = function_exists( 'apply_filters' )
+			? (string) apply_filters( 'abilityguard_redaction_placeholder', Redactor::SENTINEL )
+			: Redactor::SENTINEL;
+
+		$per_surface = array();
+		if ( isset( $safety['redact']['surfaces'] ) && is_array( $safety['redact']['surfaces'] ) ) {
+			$per_surface = $safety['redact']['surfaces'];
+		}
+
+		$result = array();
+		foreach ( $surfaces as $surface => $data ) {
+			$surface_paths = isset( $per_surface[ $surface ] ) && is_array( $per_surface[ $surface ] )
+				? $per_surface[ $surface ]
+				: array();
+
+			$all_paths = array_values( array_unique( array_merge( $global_keys, $surface_paths ) ) );
+
+			if ( array() === $all_paths || ! is_array( $data ) ) {
+				$result[ $surface ] = $data;
+				continue;
+			}
+
+			$result[ $surface ] = Redactor::redact( $data, $all_paths, $placeholder );
+		}
+
+		return $result;
 	}
 
 	/**

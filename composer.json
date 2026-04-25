@@ -46,7 +46,7 @@
         "test:integration": "wp-env run tests-cli --env-cwd=wp-content/plugins/abilityguard vendor/bin/phpunit -c phpunit-integration.xml.dist",
         "lint": "phpcs --standard=phpcs.xml.dist",
         "lint:fix": "phpcbf --standard=phpcs.xml.dist",
-        "stan": "phpstan analyse --memory-limit=512M",
+        "stan": "phpstan analyse --memory-limit=1G",
         "check": [
             "@lint",
             "@stan",
