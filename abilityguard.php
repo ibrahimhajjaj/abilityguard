@@ -3,11 +3,11 @@
  * Plugin Name:       AbilityGuard
  * Plugin URI:        https://github.com/ibrahimhajjaj/abilityguard
  * Description:       Snapshot, audit, and rollback middleware for the WordPress Abilities API.
- * Version:           0.2.0-dev
+ * Version:           1.0.0-dev
  * Requires at least: 6.9
  * Requires PHP:      8.1
  * Requires Plugins:  abilities-api
- * Network:           false
+ * Network:           true
  * Author:            Ibrahim Hajjaj
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
@@ -20,7 +20,7 @@ declare( strict_types=1 );
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'ABILITYGUARD_VERSION', '0.2.0-dev' );
+define( 'ABILITYGUARD_VERSION', '1.0.0-dev' );
 define( 'ABILITYGUARD_FILE', __FILE__ );
 define( 'ABILITYGUARD_DIR', plugin_dir_path( __FILE__ ) );
 define( 'ABILITYGUARD_URL', plugin_dir_url( __FILE__ ) );

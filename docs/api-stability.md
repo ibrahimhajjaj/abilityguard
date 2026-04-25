@@ -143,7 +143,13 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 
 ## Multisite
 
-Network activation is not supported in 0.x. The plugin file declares `Network: false`. Each subsite gets its own set of `wp_abilityguard_*` tables when AbilityGuard is activated on that site individually. Multisite-aware deployment is on the v1.x roadmap.
+Supported. The plugin file declares `Network: true`. Both network-activate and per-site activate work. Each subsite gets its own set of `wp_<N>_abilityguard_*` tables (per-site isolation, not a shared schema with a `blog_id` column). New subsites are auto-installed via `wp_initialize_site`; deleted subsites have their AbilityGuard tables dropped via `wpmu_drop_tables`.
+
+`manage_abilityguard_approvals` is granted per-subsite to administrators; approvers on subsite B can only act on subsite B's audit log. Network admins (Super Admins) implicitly have the cap everywhere.
+
+Multinetwork installs (rare) are filtered by `get_current_network_id()` during activation - sister networks aren't touched.
+
+WP-Cron's visit-driven model is unreliable on low-traffic subsites. Production deployments should run `wp abilityguard prune --all-sites` from a real system cronjob. See [`docs/multisite.md`](multisite.md) for the full story.
 
 ## Deprecation policy
 

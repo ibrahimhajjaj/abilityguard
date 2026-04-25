@@ -2,7 +2,7 @@
 
 Snapshot + audit + rollback + approval middleware for the WordPress Abilities API.
 
-**Status:** v0.9-dev. Not production ready, but feature-complete for the snapshot/audit/rollback/approval core, with extensibility for custom collectors and real byte-level file rollback via `safety.snapshot.files.strategy = 'full_content'`.
+**Status:** v1.0-dev. extensibility for custom collectors, real byte-level file rollback via `safety.snapshot.files.strategy = 'full_content'`, and full multisite support.
 
 ## What it is
 
@@ -64,6 +64,7 @@ Plugin-author guides live in `docs/`:
 - [docs/custom-collectors.md](docs/custom-collectors.md) - Writing your own collector: the `CollectorInterface` contract, a worked example, current extensibility limits, and testing patterns.
 - [docs/api-stability.md](docs/api-stability.md) - Public API surface (every supported PHP function, action, filter, REST route, CLI command, and capability) plus the SemVer policy.
 - [docs/notifications.md](docs/notifications.md) - Wiring approval requests to Slack, email, Discord, Microsoft Teams, or generic webhooks. Drop-in `add_action` recipes.
+- [docs/multisite.md](docs/multisite.md) - Running AbilityGuard on a multisite network: network vs per-site activation, capabilities, cron pattern, file-blob staging, multinetwork handling, uninstall semantics.
 
 ## Reference plugins
 
@@ -113,8 +114,8 @@ If you use Claude Code worktrees, drop a local `phpcs.xml` (not committed) so PH
 ## Known limitations
 
 - **File-content rollback is opt-in via `strategy => 'full_content'`.** The four fingerprint strategies (`mtime`, `mtime_size`, `critical_hash`, `full_hash`) detect drift and fire `abilityguard_files_changed_since_snapshot` / `abilityguard_files_deleted_since_snapshot` on restore but don't rewrite bytes. The fifth strategy `full_content` actually captures and restores file contents - encrypted (AES-256-GCM), content-addressed in a sidecar staging dir, atomic temp-file+rename writes, octal-mode preserved, 256 KB per-file cap by default. Files over the cap fall back to fingerprint-only.
-- **Multisite story is unverified.** Tables are `$wpdb->prefix`-scoped so per-site installs work, but network-level approval delegation and cross-site `caller_id` semantics haven't been designed yet.
 - **Approval queue is single-step.** Multi-stage approval (e.g. requester → reviewer → final approver) is not modeled. Each `requires_approval` ability has exactly one approve/reject decision.
+- **Multisite cron requires a real cronjob.** WP-Cron is visit-driven; on low-traffic subsites it lags. Production deployments should call `wp abilityguard prune --all-sites` from a real system cron. See [docs/multisite.md](docs/multisite.md).
 
 ## Schema
 

@@ -256,15 +256,62 @@ final class Command {
 	/**
 	 * Prune expired log rows and orphaned snapshots.
 	 *
+	 * ## OPTIONS
+	 *
+	 * [--all-sites]
+	 * : Loop every subsite in the current multisite network, running the
+	 *   prune on each. No-op on single-site installs. Use this from a
+	 *   real cronjob to work around WP-Cron's visit-driven trigger model
+	 *   on low-traffic subsites.
+	 *
 	 * ## EXAMPLES
 	 *
 	 *     wp abilityguard prune
+	 *     wp abilityguard prune --all-sites
 	 *
 	 * @param array<int, string>   $args       Positional (unused).
-	 * @param array<string, mixed> $assoc_args Flags (unused).
+	 * @param array<string, mixed> $assoc_args Flags.
 	 */
 	public static function cmd_prune( array $args, array $assoc_args ): void {
-		unset( $args, $assoc_args );
+		unset( $args );
+
+		$all_sites = ! empty( $assoc_args['all-sites'] );
+
+		if ( $all_sites && function_exists( 'is_multisite' ) && is_multisite() ) {
+			$site_ids = \AbilityGuard\Installer::network_site_ids();
+			if ( array() === $site_ids ) {
+				WP_CLI::warning( 'No subsites found in the current network.' );
+				return;
+			}
+
+			$total_logs      = 0;
+			$total_snapshots = 0;
+			$total_blobs     = 0;
+			foreach ( $site_ids as $site_id ) {
+				switch_to_blog( $site_id );
+				$result           = ( new RetentionService() )->prune();
+				$logs             = (int) ( $result['logs_deleted'] ?? 0 );
+				$snapshots        = (int) ( $result['snapshots_deleted'] ?? 0 );
+				$blobs            = (int) ( $result['blobs_deleted'] ?? 0 );
+				$total_logs      += $logs;
+				$total_snapshots += $snapshots;
+				$total_blobs     += $blobs;
+				WP_CLI::line( sprintf( ' • site %d: %d logs, %d snapshots, %d blobs', $site_id, $logs, $snapshots, $blobs ) );
+				restore_current_blog();
+			}
+
+			WP_CLI::success(
+				sprintf(
+					'Pruned across %d subsites: %d log row(s), %d snapshot(s), %d blob(s).',
+					count( $site_ids ),
+					$total_logs,
+					$total_snapshots,
+					$total_blobs
+				)
+			);
+			return;
+		}
+
 		$result = ( new RetentionService() )->prune();
 		WP_CLI::success(
 			sprintf(

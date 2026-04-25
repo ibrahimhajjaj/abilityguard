@@ -35,6 +35,7 @@ final class Plugin {
 		self::$booted = true;
 
 		Installer::maybe_upgrade();
+		Installer::register_multisite_hooks();
 
 		Registry\McpContext::register();
 

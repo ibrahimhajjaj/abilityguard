@@ -26,18 +26,129 @@ final class Installer {
 
 	/**
 	 * Activation hook.
+	 *
+	 * On a multisite network-activate, walks every subsite in the current
+	 * network and runs the per-site activation routine on each. Single-site
+	 * installs (or per-site activation of a network-deployed plugin) hit
+	 * just the current site. Multinetwork installs are filtered to the
+	 * current network only - sister networks are left alone.
+	 *
+	 * @param bool $network_wide Passed by `register_activation_hook()` when
+	 *                           the plugin is being network-activated.
 	 */
-	public static function activate(): void {
+	public static function activate( bool $network_wide = false ): void {
+		if ( $network_wide && function_exists( 'is_multisite' ) && is_multisite() ) {
+			foreach ( self::network_site_ids() as $site_id ) {
+				switch_to_blog( $site_id );
+				self::activate_single_site();
+				restore_current_blog();
+			}
+			return;
+		}
+		self::activate_single_site();
+	}
+
+	/**
+	 * Deactivation hook. Clears the retention cron; data is preserved.
+	 *
+	 * Mirrors `activate()` for the network-wide case.
+	 *
+	 * @param bool $network_wide Passed by `register_deactivation_hook()`.
+	 */
+	public static function deactivate( bool $network_wide = false ): void {
+		if ( $network_wide && function_exists( 'is_multisite' ) && is_multisite() ) {
+			foreach ( self::network_site_ids() as $site_id ) {
+				switch_to_blog( $site_id );
+				( new Retention\Scheduler() )->unschedule();
+				restore_current_blog();
+			}
+			return;
+		}
+		( new Retention\Scheduler() )->unschedule();
+	}
+
+	/**
+	 * Per-subsite activation: install tables, schedule cron, grant cap.
+	 *
+	 * Used for both single-site activation and the network-wide loop. Also
+	 * called from the `wp_initialize_site` listener so freshly-created
+	 * subsites on an already-active network get the same treatment.
+	 */
+	public static function activate_single_site(): void {
 		self::install();
 		( new Retention\Scheduler() )->schedule();
 		Approval\CapabilityManager::grant_to_administrators();
 	}
 
 	/**
-	 * Deactivation hook. Clears the retention cron; data is preserved.
+	 * Subsite IDs in the current network. Filters by `$wpdb->siteid` so
+	 * multinetwork installs (rare) don't accidentally touch sister networks.
+	 *
+	 * @return int[]
 	 */
-	public static function deactivate(): void {
-		( new Retention\Scheduler() )->unschedule();
+	public static function network_site_ids(): array {
+		if ( ! function_exists( 'get_sites' ) || ! function_exists( 'get_current_network_id' ) ) {
+			return array();
+		}
+		$ids = get_sites(
+			array(
+				'fields'     => 'ids',
+				'network_id' => get_current_network_id(),
+				'number'     => 0,
+			)
+		);
+		return array_map( 'intval', is_array( $ids ) ? $ids : array() );
+	}
+
+	/**
+	 * Wire the subsite-lifecycle hooks. No-op on single-site installs.
+	 *
+	 * - `wp_initialize_site`: a fresh subsite was just created - install
+	 *   tables and grant the approval cap on it so audit/rollback works
+	 *   from the moment that subsite goes live.
+	 * - `wpmu_drop_tables`: a subsite is being deleted - register our
+	 *   four tables for cleanup so they go down with the subsite instead
+	 *   of becoming orphans.
+	 *
+	 * Both hooks are idempotent: re-firing them on an already-installed
+	 * subsite is harmless because dbDelta and `add_role` are themselves
+	 * idempotent.
+	 */
+	public static function register_multisite_hooks(): void {
+		if ( ! function_exists( 'is_multisite' ) || ! is_multisite() ) {
+			return;
+		}
+
+		add_action(
+			'wp_initialize_site',
+			static function ( $new_site ): void {
+				if ( ! is_object( $new_site ) || empty( $new_site->blog_id ) ) {
+					return;
+				}
+				if ( ! function_exists( 'is_plugin_active_for_network' ) ) {
+					require_once ABSPATH . 'wp-admin/includes/plugin.php';
+				}
+				if ( ! is_plugin_active_for_network( plugin_basename( ABILITYGUARD_FILE ) ) ) {
+					return;
+				}
+				switch_to_blog( (int) $new_site->blog_id );
+				self::activate_single_site();
+				restore_current_blog();
+			},
+			10,
+			1
+		);
+
+		add_filter(
+			'wpmu_drop_tables',
+			static function ( array $tables ): array {
+				global $wpdb;
+				foreach ( array( 'abilityguard_log', 'abilityguard_log_meta', 'abilityguard_snapshots', 'abilityguard_approvals' ) as $name ) {
+					$tables[] = $wpdb->prefix . $name;
+				}
+				return $tables;
+			}
+		);
 	}
 
 	/**
@@ -51,7 +162,10 @@ final class Installer {
 	}
 
 	/**
-	 * Create / upgrade tables via dbDelta.
+	 * Create / upgrade tables via dbDelta on the current site.
+	 *
+	 * Always operates against `$wpdb->prefix` - under a `switch_to_blog()`
+	 * call this points at the correct subsite's tables. Idempotent.
 	 */
 	public static function install(): void {
 		global $wpdb;
