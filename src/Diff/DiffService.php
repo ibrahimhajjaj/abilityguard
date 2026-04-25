@@ -33,10 +33,7 @@ final class DiffService {
 	 * @return list<array{ surface: string, key: string, before: mixed, after: mixed, changed: bool }>
 	 */
 	public function compute( array $snapshot ): array {
-		/** @var array<string, mixed> $pre */
-		$pre = is_array( $snapshot['surfaces'] ?? null ) ? $snapshot['surfaces'] : array();
-
-		/** @var array<string, mixed>|null $post_state */
+		$pre        = is_array( $snapshot['surfaces'] ?? null ) ? $snapshot['surfaces'] : array();
 		$post_state = isset( $snapshot['post_state'] ) && is_array( $snapshot['post_state'] )
 			? $snapshot['post_state']
 			: null;

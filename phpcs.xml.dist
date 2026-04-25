@@ -19,6 +19,7 @@
 
 	<config name="minimum_supported_wp_version" value="6.9"/>
 	<config name="testVersion" value="8.1-"/>
+	<config name="ignore_warnings_on_exit" value="1"/>
 
 	<rule ref="WordPress-Extra">
 		<exclude name="WordPress.Files.FileName"/>

@@ -56,10 +56,9 @@ final class RetentionServiceTest extends WP_UnitTestCase {
 			)
 		);
 
-		// Backdate the row.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		if ( $days_ago > 0 ) {
 			$table = Installer::table( 'log' );
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 			$wpdb->query(
 				$wpdb->prepare(
 					"UPDATE {$table} SET created_at = NOW() - INTERVAL %d DAY WHERE invocation_id = %s",
@@ -68,6 +67,7 @@ final class RetentionServiceTest extends WP_UnitTestCase {
 				)
 			);
 		}
+		// phpcs:enable
 	}
 
 	/**
@@ -94,10 +94,12 @@ final class RetentionServiceTest extends WP_UnitTestCase {
 	private function log_exists( string $invocation_id ): int {
 		global $wpdb;
 		$table = Installer::table( 'log' );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-		return (int) $wpdb->get_var(
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$count = (int) $wpdb->get_var(
 			$wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE invocation_id = %s", $invocation_id )
 		);
+		// phpcs:enable
+		return $count;
 	}
 
 	/**
@@ -110,10 +112,12 @@ final class RetentionServiceTest extends WP_UnitTestCase {
 	private function snapshot_exists( string $invocation_id ): int {
 		global $wpdb;
 		$table = Installer::table( 'snapshots' );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-		return (int) $wpdb->get_var(
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$count = (int) $wpdb->get_var(
 			$wpdb->prepare( "SELECT COUNT(*) FROM {$table} WHERE invocation_id = %s", $invocation_id )
 		);
+		// phpcs:enable
+		return $count;
 	}
 
 	// ---------------------------------------------------------------

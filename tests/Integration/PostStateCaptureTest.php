@@ -27,9 +27,6 @@ final class PostStateCaptureTest extends WP_UnitTestCase {
 		Installer::install();
 	}
 
-	// ------------------------------------------------------------------
-	// Test 1: SnapshotService::capture_post() writes post_state field.
-	// ------------------------------------------------------------------
 
 	public function test_capture_post_stores_post_state_on_snapshot_row(): void {
 		$post_id = self::factory()->post->create();
@@ -60,9 +57,6 @@ final class PostStateCaptureTest extends WP_UnitTestCase {
 		$this->assertSame( '10.00', $row['surfaces']['post_meta'][ $post_id ]['_price'] );
 	}
 
-	// ------------------------------------------------------------------
-	// Test 2: AbilityWrapper writes post_state_json through real wpdb.
-	// ------------------------------------------------------------------
 
 	public function test_ability_wrapper_writes_post_state_on_successful_execution(): void {
 		if ( ! function_exists( 'wp_register_ability' ) ) {
@@ -123,9 +117,6 @@ final class PostStateCaptureTest extends WP_UnitTestCase {
 		$this->assertSame( '99.00', $snapshot['post_state']['post_meta'][ $post_id ]['_price'] );
 	}
 
-	// ------------------------------------------------------------------
-	// Test 3: AbilityWrapper does NOT write post_state_json when callback throws.
-	// ------------------------------------------------------------------
 
 	public function test_ability_wrapper_does_not_write_post_state_on_exception(): void {
 		if ( ! function_exists( 'wp_register_ability' ) ) {
@@ -169,7 +160,7 @@ final class PostStateCaptureTest extends WP_UnitTestCase {
 		try {
 			$ability->execute( array( 'post_id' => $post_id ) );
 		} catch ( \RuntimeException $e ) {
-			// Expected - swallow.
+			unset( $e );
 		}
 
 		$repo = new LogRepository();
@@ -183,10 +174,9 @@ final class PostStateCaptureTest extends WP_UnitTestCase {
 		$this->assertNull( $snapshot['post_state'], 'post_state must be null when callback throws' );
 	}
 
-	// ------------------------------------------------------------------
-	// Helper: ensure the test category exists (mirrors RegistrationFilterTest).
-	// ------------------------------------------------------------------
-
+	/**
+	 * Ensure the test ability category exists (mirrors RegistrationFilterTest).
+	 */
 	private function ensure_test_category(): void {
 		if ( wp_has_ability_category( 'abilityguard-tests' ) ) {
 			return;

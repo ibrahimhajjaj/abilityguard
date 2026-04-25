@@ -47,7 +47,6 @@ final class TaxonomyCollector implements CollectorInterface {
 					continue;
 				}
 
-				/** @var int[] $term_ids */
 				$term_ids = array_map( 'intval', $terms );
 				sort( $term_ids );
 

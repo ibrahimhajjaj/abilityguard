@@ -41,7 +41,6 @@ final class UserRoleCollector implements CollectorInterface {
 				continue;
 			}
 
-			/** @var array<string, bool> $caps */
 			$caps = array_map( 'boolval', $user->caps );
 
 			$out[ $user_id ] = array(

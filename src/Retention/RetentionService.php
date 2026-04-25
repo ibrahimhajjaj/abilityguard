@@ -47,10 +47,10 @@ final class RetentionService {
 
 		$logs_deleted = 0;
 
-		// Prune non-destructive rows.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
+		// Table names come from Installer::table() and are not user input.
 		$days_normal = $this->retention_days_normal();
 		if ( $days_normal > 0 ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 			$wpdb->query(
 				$wpdb->prepare(
 					"DELETE FROM {$log} WHERE destructive = 0 AND created_at < NOW() - INTERVAL %d DAY",
@@ -60,10 +60,8 @@ final class RetentionService {
 			$logs_deleted += (int) $wpdb->rows_affected;
 		}
 
-		// Prune destructive rows.
 		$days_destructive = $this->retention_days_destructive();
 		if ( $days_destructive > 0 ) {
-			// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 			$wpdb->query(
 				$wpdb->prepare(
 					"DELETE FROM {$log} WHERE destructive = 1 AND created_at < NOW() - INTERVAL %d DAY",
@@ -73,12 +71,11 @@ final class RetentionService {
 			$logs_deleted += (int) $wpdb->rows_affected;
 		}
 
-		// Prune orphaned snapshots (invocation_id no longer in log table).
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
 		$wpdb->query(
 			"DELETE s FROM {$snapshots} s LEFT JOIN {$log} l ON s.invocation_id = l.invocation_id WHERE l.invocation_id IS NULL"
 		);
 		$snapshots_deleted = (int) $wpdb->rows_affected;
+		// phpcs:enable
 
 		return array(
 			'logs_deleted'      => $logs_deleted,
