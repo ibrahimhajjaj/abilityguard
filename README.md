@@ -55,6 +55,7 @@ Plugin-author guides live in `docs/`:
 - [docs/safety-config.md](docs/safety-config.md) - Adding the safety config to your ability: full schema reference, snapshot resolver forms, all five surfaces, redaction, payload caps, and common mistakes.
 - [docs/approval-workflow.md](docs/approval-workflow.md) - Approval queue: when to use `requires_approval`, the approve/reject lifecycle, CLI commands, and integration recipes.
 - [docs/custom-collectors.md](docs/custom-collectors.md) - Writing your own collector: the `CollectorInterface` contract, a worked example, current extensibility limits, and testing patterns.
+- [docs/api-stability.md](docs/api-stability.md) - Public API surface (every supported PHP function, action, filter, REST route, CLI command, and capability) plus the SemVer policy.
 
 ## Reference plugins
 

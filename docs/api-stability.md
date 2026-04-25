@@ -1,0 +1,128 @@
+# API stability
+
+AbilityGuard follows **Semantic Versioning** (MAJOR.MINOR.PATCH) for its public API.
+
+The public API is defined here. Anything not listed is internal and may change without notice.
+
+## SemVer policy
+
+- **PATCH** (0.x.Y) - Bug fixes only. No public-API change.
+- **MINOR** (0.X.0) - Backwards-compatible additions: new public hooks, new public methods, new REST routes, new CLI subcommands, new safety-config keys. Existing public API keeps its contract.
+- **MAJOR** (X.0.0) - Removals or breaking changes to anything in the public API. Always paired with a migration note in the changelog.
+
+Pre-1.0 (where we are now), the public API is provisional but we still bump MINOR for additions and call out breaking changes explicitly in the release notes. We intend to freeze the public API at 1.0.
+
+## Public API surface
+
+### PHP functions (procedural helpers)
+
+| Function | Since | Behaviour |
+|---|---|---|
+| `abilityguard_rollback( int\|string $ref, bool $force = false )` | 0.1 | Roll back an invocation. |
+| `abilityguard_snapshot_meta( int $post_id, string[] $keys )` | 0.1 | Read current post_meta values matching the spec shape. |
+| `abilityguard_snapshot_options( string[] $keys )` | 0.1 | Read current option values matching the spec shape. |
+
+### Safety config keys (passed to `wp_register_ability` under `safety`)
+
+| Key | Since | Type |
+|---|---|---|
+| `destructive` | 0.1 | bool |
+| `snapshot` | 0.1 | array \| callable returning the spec |
+| `requires_approval` | 0.2 | bool |
+| `redact` | 0.3 | array - sub-keys: `input`, `result`, `surfaces` (each: string[] of dot-paths) |
+| `scrub` | 0.3 | callable - receives `(mixed $value, string $kind)`, returns redacted value |
+| `max_payload_bytes` | 0.3 | int - 0 disables truncation |
+| `skip_drift_check` | 0.3 | bool - currently read from `log_meta`, not yet from `safety` directly  |
+| `lock_timeout` | 0.4 | int - seconds; 0 = fail fast; -1 = lock disabled |
+| `collectors` | - | reserved for v0.6, not yet wired |
+
+### Snapshot surfaces (keys returned by the `snapshot` resolver)
+
+| Surface | Since | Spec shape |
+|---|---|---|
+| `post_meta` | 0.1 | `array<int $post_id, string[] $meta_keys>` |
+| `options` | 0.1 | `string[]` |
+| `taxonomy` | 0.2 | `array<int $post_id, string[] $taxonomy_names>` |
+| `user_role` | 0.2 | `int[]` |
+| `files` | 0.2 | `string[]` (read-only restore - fires `abilityguard_files_changed_since_snapshot`) |
+
+### WordPress actions
+
+| Action | Since | Args |
+|---|---|---|
+| `abilityguard_booted` | 0.1 | `()` - fires once on `plugins_loaded` after services wire |
+| `abilityguard_rollback` | 0.1 | `( $log, $snapshot, $drifted_surfaces = [] )` |
+| `abilityguard_rollback_drift` | 0.3 | `( $log, $snapshot, $drifted_surfaces )` |
+| `abilityguard_files_changed_since_snapshot` | 0.2 | `( string[] $changed_paths )` |
+| `abilityguard_retention_prune` | 0.2 | `()` - daily WP cron hook running `RetentionService::prune()` |
+| `abilityguard_bulk_rollback_complete` | 0.4 | `( array $summary )` |
+| `abilityguard_approval_requested` | 0.5 | `( int $approval_id, string $ability_name, int $log_id, mixed $input, string $invocation_id )` |
+| `abilityguard_invocation_started` | 0.5 | `( string $invocation_id, string $ability_name, mixed $input, array $context )` |
+| `abilityguard_invocation_completed` | 0.5 | `( string $invocation_id, string $ability_name, string $status, int $duration_ms, array $context )` |
+| `abilityguard_invocation_error` | 0.5 | `( string $invocation_id, string $ability_name, ?Throwable $thrown, mixed $result, int $duration_ms )` |
+
+### WordPress filters
+
+| Filter | Since | Default | Used for |
+|---|---|---|---|
+| `abilityguard_retention_days_normal` | 0.2 | `30` | Days to keep non-destructive log rows |
+| `abilityguard_retention_days_destructive` | 0.2 | `180` | Days to keep destructive log rows |
+| `abilityguard_redact_keys` | 0.3 | `Redactor::default_keys()` | Global key list to redact |
+| `abilityguard_redaction_placeholder` | 0.3 | `'[redacted]'` | Sentinel string when strategy=`'placeholder'` |
+| `abilityguard_redaction_strategy` | 0.4 | `'encrypt'` | `'encrypt'` (default) or `'placeholder'` |
+| `abilityguard_max_args_bytes` | 0.3 | `65_536` | Max bytes for `args_json` |
+| `abilityguard_max_result_bytes` | 0.3 | `131_072` | Max bytes for `result_json` |
+| `abilityguard_max_snapshot_bytes` | 0.3 | `1_048_576` | Max bytes per snapshot surface |
+| `abilityguard_lock_timeout` | 0.4 | `5` | Default seconds to wait on advisory lock |
+| `abilityguard_lock_reentrant` | 0.5 | `false` | When true, re-entrant per-process lock acquires succeed (MySQL-only behavior) |
+| `abilityguard_can_approve` | 0.4 | `true` | Veto an approval decision: `( bool $can, array $approval_row, int $user_id ): bool` |
+
+### REST endpoints (namespace `abilityguard/v1`)
+
+| Method | Path | Since | Capability |
+|---|---|---|---|
+| `GET` | `/log` | 0.1 | `manage_options` |
+| `GET` | `/log/<id>` | 0.1 | `manage_options` |
+| `POST` | `/rollback/<id>` | 0.1 | `manage_options` |
+| `POST` | `/rollback/bulk` | 0.4 | `manage_options` |
+| `GET` | `/approval` | 0.5 | `manage_abilityguard_approvals` |
+| `POST` | `/approval/<id>/approve` | 0.4 | `manage_abilityguard_approvals` |
+| `POST` | `/approval/<id>/reject` | 0.4 | `manage_abilityguard_approvals` |
+| `GET` | `/retention` | 0.5 | `manage_options` |
+
+### WP-CLI subcommands
+
+| Command | Since |
+|---|---|
+| `wp abilityguard log list` | 0.1 |
+| `wp abilityguard log show <ref>` | 0.1 |
+| `wp abilityguard rollback <ref>` | 0.1 |
+| `wp abilityguard rollback --batch=<filter>` | 0.4 |
+| `wp abilityguard rollback --force` | 0.3 |
+| `wp abilityguard rollback --dry-run` | 0.4 |
+| `wp abilityguard prune` | 0.2 |
+| `wp abilityguard approval list` | 0.2 |
+| `wp abilityguard approval approve <id>` | 0.2 |
+| `wp abilityguard approval reject <id>` | 0.2 |
+
+### Capabilities
+
+| Capability | Since | Default role assignment |
+|---|---|---|
+| `manage_abilityguard_approvals` | 0.4 | `administrator` (granted on plugin activation) |
+
+## What's NOT public
+
+- Any `private`/`protected` method on any service class.
+- The schema of `wp_abilityguard_*` tables - read via `LogRepository` / `ApprovalRepository` / `SnapshotStore`. Direct SQL is not supported and may break.
+- Internal namespaces like `AbilityGuard\Support\Cipher` (the encryption envelope shape is internal - use `safety.scrub` if you need to influence redaction output).
+- The React app structure (`assets/admin.jsx`) - extend via REST + actions, not by patching the bundle.
+- `Lock::reset_for_tests()` and any other `*_for_tests` methods.
+
+## Multisite
+
+Network activation is not supported in 0.x. The plugin file declares `Network: false`. Each subsite gets its own set of `wp_abilityguard_*` tables when AbilityGuard is activated on that site individually. Multisite-aware deployment is on the v1.x roadmap.
+
+## Deprecation policy
+
+Deprecations land in a MINOR release with a `_deprecated_function` / `_deprecated_hook` notice. Removal happens no sooner than the next MAJOR. The CHANGELOG always lists deprecations explicitly.
