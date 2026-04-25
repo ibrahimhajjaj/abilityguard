@@ -10,6 +10,7 @@ declare( strict_types=1 );
 namespace AbilityGuard\Rollback;
 
 use AbilityGuard\Audit\LogRepository;
+use AbilityGuard\Installer;
 use AbilityGuard\Snapshot\Collector\CollectorInterface;
 use AbilityGuard\Snapshot\Collector\FilesCollector;
 use AbilityGuard\Snapshot\Collector\OptionsCollector;
@@ -17,11 +18,40 @@ use AbilityGuard\Snapshot\Collector\PostMetaCollector;
 use AbilityGuard\Snapshot\Collector\TaxonomyCollector;
 use AbilityGuard\Snapshot\Collector\UserRoleCollector;
 use AbilityGuard\Snapshot\SnapshotStore;
+use AbilityGuard\Support\Hash;
 use AbilityGuard\Support\Redactor;
 use WP_Error;
 
 /**
  * Reverses a recorded invocation by restoring each captured surface.
+ *
+ * ### Drift-check behaviour (v0.3)
+ *
+ * Before restoring each surface, `rollback()` re-runs the collector against
+ * the same spec implied by the captured data and compares the live hash to
+ * the captured hash. If they differ the surface has "drifted".
+ *
+ * - No drift → restores as before (returns true).
+ * - Drift, force=false → returns WP_Error('abilityguard_rollback_drift')
+ *   and restores NOTHING; log status is NOT updated to rolled_back.
+ * - Drift, force=true → fires 'abilityguard_rollback_drift' action for
+ *   observability and restores ALL surfaces regardless.
+ *
+ * ### Per-ability opt-out
+ *
+ * A registration can set `safety.skip_drift_check = true` to bypass the
+ * check entirely. When bypassed the drift action still fires for audit
+ * purposes (if drift was present).
+ *
+ * ### Action signatures
+ *
+ * do_action( 'abilityguard_rollback_drift', $log, $snapshot, $drifted_surfaces )
+ *   Fired whenever drift is detected (even when skipped or forced).
+ *   - $drifted_surfaces: string[] of surface names that drifted.
+ *
+ * do_action( 'abilityguard_rollback', $log, $snapshot, $drifted_surfaces )
+ *   Fired after a successful restore.
+ *   - $drifted_surfaces: string[] (empty when no drift occurred).
  */
 final class RollbackService {
 
@@ -60,7 +90,7 @@ final class RollbackService {
 	 * rolled-back anyway even when keys were skipped.
 	 *
 	 * @param int|string $reference Log id or invocation uuid.
-	 * @param bool       $force     Mark rolled-back even if some keys were skipped.
+	 * @param bool       $force     When true, drift is ignored AND redacted skips are tolerated; restore proceeds.
 	 *
 	 * @return true|WP_Error
 	 */
@@ -78,8 +108,45 @@ final class RollbackService {
 			return new WP_Error( 'abilityguard_snapshot_missing', 'No snapshot stored for this invocation.' );
 		}
 
-		$skipped = array(); // Track keys that could not be restored due to redaction.
+		// --- Drift check -------------------------------------------------------
+		$skip_drift       = $this->should_skip_drift( $log );
+		$drifted_surfaces = array();
 
+		foreach ( $snapshot['surfaces'] as $surface => $captured ) {
+			if ( ! isset( $this->collectors[ $surface ] ) || ! is_array( $captured ) ) {
+				continue;
+			}
+
+			$spec          = $this->derive_spec( $surface, $captured );
+			$current       = $this->collectors[ $surface ]->collect( $spec );
+			$captured_hash = Hash::stable( $captured );
+			$current_hash  = Hash::stable( $current );
+
+			if ( $captured_hash !== $current_hash ) {
+				$drifted_surfaces[] = $surface;
+			}
+		}
+
+		if ( ! empty( $drifted_surfaces ) ) {
+			do_action( 'abilityguard_rollback_drift', $log, $snapshot, $drifted_surfaces );
+		}
+
+		if ( ! empty( $drifted_surfaces ) && ! $force && ! $skip_drift ) {
+			return new WP_Error(
+				'abilityguard_rollback_drift',
+				sprintf(
+					'Rollback aborted: live state has drifted on surface(s): %s. Use force=true to override.',
+					implode( ', ', $drifted_surfaces )
+				),
+				array(
+					'drifted_surfaces'  => $drifted_surfaces,
+					'restored_surfaces' => array(),
+				)
+			);
+		}
+
+		// --- Restore (skips redacted keys) ------------------------------------
+		$skipped = array(); // Keys not restored because their value is the redaction sentinel.
 		foreach ( $snapshot['surfaces'] as $surface => $captured ) {
 			if ( ! isset( $this->collectors[ $surface ] ) || ! is_array( $captured ) ) {
 				continue;
@@ -114,7 +181,14 @@ final class RollbackService {
 
 		$this->logs->update_status( (int) $log['id'], 'rolled_back' );
 
-		do_action( 'abilityguard_rollback', $log, $snapshot );
+		/**
+		 * Fires after a successful rollback.
+		 *
+		 * @param array<string, mixed> $log              Audit log row.
+		 * @param array<string, mixed> $snapshot         Snapshot row.
+		 * @param string[]             $drifted_surfaces Surfaces that drifted (empty when no drift).
+		 */
+		do_action( 'abilityguard_rollback', $log, $snapshot, $drifted_surfaces );
 
 		return true;
 	}
@@ -146,5 +220,73 @@ final class RollbackService {
 			return $this->logs->find( (int) $reference );
 		}
 		return $this->logs->find_by_invocation_id( (string) $reference );
+	}
+
+	/**
+	 * Derive the collector spec from the captured payload.
+	 *
+	 * Each collector's spec mirrors the keys/structure of its captured output:
+	 * - post_meta: array<int, string[]>  (post_id => meta_key[]).
+	 * - options:   string[]              (option names).
+	 * - All other surfaces: the captured array is passed back as-is (the
+	 *   collectors that implement derive-from-capture are responsible for
+	 *   handling the shape; unknown surfaces return the captured data unchanged
+	 *   so collect() can use it as a spec if supported).
+	 *
+	 * @param string       $surface  Surface name.
+	 * @param array<mixed> $captured Captured payload from the snapshot.
+	 *
+	 * @return mixed
+	 */
+	private function derive_spec( string $surface, array $captured ): mixed {
+		switch ( $surface ) {
+			case 'post_meta':
+				// Spec: array<int, string[]>. Captured: array<int, array<string, mixed>>.
+				$spec = array();
+				foreach ( $captured as $post_id => $meta ) {
+					if ( is_array( $meta ) ) {
+						$spec[ (int) $post_id ] = array_keys( $meta );
+					}
+				}
+				return $spec;
+
+			case 'options':
+				// Spec: string[]. Captured: array<string, mixed>.
+				return array_keys( $captured );
+
+			default:
+				// For taxonomy, user_role, files: pass captured data as spec.
+				// The collectors can use the captured shape to re-read live state.
+				return $captured;
+		}
+	}
+
+	/**
+	 * Determine whether drift checking should be skipped for this invocation.
+	 *
+	 * Reads the `skip_drift_check` meta value from the abilityguard_log_meta
+	 * table. Falls back to false (always check) when not present.
+	 *
+	 * @param array<string, mixed> $log Log row.
+	 *
+	 * @return bool
+	 */
+	private function should_skip_drift( array $log ): bool {
+		global $wpdb;
+		$log_id = isset( $log['id'] ) ? (int) $log['id'] : 0;
+		if ( 0 === $log_id ) {
+			return false;
+		}
+		$table = Installer::table( 'log_meta' );
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$value = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$table} WHERE log_id = %d AND meta_key = %s LIMIT 1",
+				$log_id,
+				'skip_drift_check'
+			)
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		return '1' === $value || 'true' === $value;
 	}
 }

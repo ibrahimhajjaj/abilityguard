@@ -81,6 +81,13 @@ final class RestController {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'permission_callback' => array( __CLASS__, 'check_perms' ),
 				'callback'            => array( __CLASS__, 'do_rollback' ),
+				'args'                => array(
+					'force' => array(
+						'type'              => 'boolean',
+						'default'           => false,
+						'sanitize_callback' => 'rest_sanitize_boolean',
+					),
+				),
 			)
 		);
 	}
@@ -139,12 +146,17 @@ final class RestController {
 	/**
 	 * POST /rollback/<id> - trigger rollback for an invocation.
 	 *
+	 * Accepts an optional `force` query/body parameter (boolean). When true,
+	 * drift is ignored and the rollback proceeds regardless of live-state
+	 * changes since the snapshot was taken.
+	 *
 	 * @param \WP_REST_Request $req Request.
 	 */
 	public static function do_rollback( WP_REST_Request $req ): WP_REST_Response|WP_Error {
 		$id      = (int) $req->get_param( 'id' );
+		$force   = (bool) $req->get_param( 'force' );
 		$service = new RollbackService( new LogRepository(), new SnapshotStore() );
-		$result  = $service->rollback( $id );
+		$result  = $service->rollback( $id, $force );
 
 		if ( is_wp_error( $result ) ) {
 			$status = 'abilityguard_already_rolled_back' === $result->get_error_code() ? 409 : 400;

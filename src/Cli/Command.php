@@ -118,6 +118,9 @@ final class Command {
 	 * [--yes]
 	 * : Skip confirmation.
 	 *
+	 * [--force]
+	 * : Ignore drift and restore even if live state has changed since capture.
+	 *
 	 * @param array<int, string>   $args       Positional.
 	 * @param array<string, mixed> $assoc_args Flags.
 	 */
@@ -125,14 +128,15 @@ final class Command {
 		if ( empty( $args[0] ) ) {
 			WP_CLI::error( 'Pass a log id or invocation uuid.' );
 		}
-		$ref = $args[0];
+		$ref   = $args[0];
+		$force = ! empty( $assoc_args['force'] );
 
 		if ( empty( $assoc_args['yes'] ) ) {
 			WP_CLI::confirm( "Roll back invocation {$ref}?", $assoc_args );
 		}
 
 		$service = new RollbackService( new LogRepository(), new SnapshotStore() );
-		$result  = $service->rollback( ctype_digit( $ref ) ? (int) $ref : $ref );
+		$result  = $service->rollback( ctype_digit( $ref ) ? (int) $ref : $ref, $force );
 
 		if ( is_wp_error( $result ) ) {
 			WP_CLI::error( $result->get_error_message() );

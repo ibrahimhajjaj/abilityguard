@@ -16,15 +16,16 @@ if ( ! function_exists( 'abilityguard_rollback' ) ) {
 	 * Roll back an invocation by id.
 	 *
 	 * @param int|string $invocation_id Numeric log id or invocation uuid.
+	 * @param bool       $force         When true, drift is ignored and restore proceeds.
 	 *
 	 * @return true|\WP_Error
 	 */
-	function abilityguard_rollback( $invocation_id ) {
+	function abilityguard_rollback( $invocation_id, bool $force = false ) {
 		$service = new \AbilityGuard\Rollback\RollbackService(
 			new \AbilityGuard\Audit\LogRepository(),
 			new \AbilityGuard\Snapshot\SnapshotStore()
 		);
-		return $service->rollback( $invocation_id );
+		return $service->rollback( $invocation_id, $force );
 	}
 }
 
