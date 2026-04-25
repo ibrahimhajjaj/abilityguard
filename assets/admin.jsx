@@ -780,7 +780,22 @@ function ListScreen({ store }) {
   const [collapsedDays, setCollapsedDays] = React.useState({});
   const [dayPages, setDayPages] = React.useState({});
   const [jumpDate, setJumpDate] = React.useState("");
-  const [subView, setSubView] = React.useState("activity"); // "activity" | "approvals"
+  // Read ?view= and ?approval_id= so a Slack/email click-through link of the
+  // form tools.php?page=abilityguard&view=approvals&approval_id=N lands on the
+  // right tab with the matching row scrolled into view.
+  const initialView = (() => {
+    try {
+      const v = new URLSearchParams(window.location.search).get("view");
+      return v === "approvals" ? "approvals" : "activity";
+    } catch { return "activity"; }
+  })();
+  const initialFocusApprovalId = (() => {
+    try {
+      const id = parseInt(new URLSearchParams(window.location.search).get("approval_id") || "", 10);
+      return Number.isFinite(id) && id > 0 ? id : null;
+    } catch { return null; }
+  })();
+  const [subView, setSubView] = React.useState(initialView); // "activity" | "approvals"
 
   const filterKey = `${store.filtered.length}-${store.tokens.length}-${store.query}-${sort}`;
   React.useEffect(() => { setDaysShown(DAYS_PER_PAGE); setCollapsedDays({}); setDayPages({}); }, [filterKey]);
@@ -914,7 +929,7 @@ function ListScreen({ store }) {
         </div>
 
         {subView === "approvals" ? (
-          <ApprovalsView store={store} />
+          <ApprovalsView store={store} focusApprovalId={initialFocusApprovalId} />
         ) : (
           <>
             <TokenSearch store={store} />
@@ -1143,7 +1158,7 @@ function RetentionWidget() {
 }
 
 /* ---- Approvals sub-view ---- */
-function ApprovalsView({ store }) {
+function ApprovalsView({ store, focusApprovalId = null }) {
   const [approvals, setApprovals] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
@@ -1178,6 +1193,25 @@ function ApprovalsView({ store }) {
   }, []);
 
   React.useEffect(() => { load(); }, [load]);
+
+  // After approvals load, scroll the focused row into view (deep link from
+  // a notification). Drop the approval_id query arg from the URL so a
+  // refresh doesn't keep re-focusing.
+  const focusHandled = React.useRef(false);
+  React.useEffect(() => {
+    if (focusHandled.current || !focusApprovalId || !approvals) return;
+    const row = document.getElementById(`approval-row-${focusApprovalId}`);
+    if (!row) return;
+    focusHandled.current = true;
+    row.scrollIntoView({ behavior: "smooth", block: "center" });
+    row.classList.add("ag-approval-flash");
+    setTimeout(() => row.classList.remove("ag-approval-flash"), 2000);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("approval_id");
+      window.history.replaceState({}, document.title, url.toString());
+    } catch { /* ignore - non-critical */ }
+  }, [approvals, focusApprovalId]);
 
   const bulkAct = (action) => {
     const ids = [...selected];
@@ -1350,10 +1384,11 @@ function ApprovalsView({ store }) {
         </div>
       )}
       {visibleApprovals.map((appr) => (
-        <div key={appr.id} style={{
+        <div key={appr.id} id={`approval-row-${appr.id}`} style={{
           background: "var(--surface)", border: "1px solid var(--border)",
           borderRadius: "var(--radius)", padding: "12px 16px", marginBottom: 8,
           display: "flex", alignItems: "center", gap: 12,
+          transition: "background 600ms",
         }}>
           <input
             type="checkbox"
