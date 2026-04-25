@@ -10,6 +10,7 @@ declare( strict_types=1 );
 namespace AbilityGuard\Cli;
 
 use AbilityGuard\Audit\LogRepository;
+use AbilityGuard\Retention\RetentionService;
 use AbilityGuard\Rollback\RollbackService;
 use AbilityGuard\Snapshot\SnapshotStore;
 use WP_CLI;
@@ -47,6 +48,7 @@ final class Command {
 		}
 		WP_CLI::add_command( 'abilityguard log', array( __CLASS__, 'cmd_log_root' ) );
 		WP_CLI::add_command( 'abilityguard rollback', array( __CLASS__, 'cmd_rollback' ) );
+		WP_CLI::add_command( 'abilityguard prune', array( __CLASS__, 'cmd_prune' ) );
 	}
 
 	/**
@@ -133,6 +135,27 @@ final class Command {
 			WP_CLI::error( $result->get_error_message() );
 		}
 		WP_CLI::success( "Rolled back invocation {$ref}." );
+	}
+
+	/**
+	 * Prune expired log rows and orphaned snapshots.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp abilityguard prune
+	 *
+	 * @param array<int, string>   $args       Positional (unused).
+	 * @param array<string, mixed> $assoc_args Flags (unused).
+	 */
+	public static function cmd_prune( array $args, array $assoc_args ): void {
+		$result = ( new RetentionService() )->prune();
+		WP_CLI::success(
+			sprintf(
+				'Pruned %d log row(s) and %d snapshot(s).',
+				$result['logs_deleted'],
+				$result['snapshots_deleted']
+			)
+		);
 	}
 
 	/**

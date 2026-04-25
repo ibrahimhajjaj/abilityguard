@@ -9,6 +9,8 @@ declare( strict_types=1 );
 
 defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 
+wp_clear_scheduled_hook( 'abilityguard_retention_prune' );
+
 global $wpdb;
 
 $tables = array(

@@ -42,6 +42,8 @@ final class Plugin {
 		);
 		$registration->register();
 
+		( new Retention\Scheduler() )->register();
+
 		Cli\Command::register();
 		Admin\AdminMenu::register();
 		Admin\RestController::register();

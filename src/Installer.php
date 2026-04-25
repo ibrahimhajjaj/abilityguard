@@ -29,13 +29,14 @@ final class Installer {
 	 */
 	public static function activate(): void {
 		self::install();
+		( new Retention\Scheduler() )->schedule();
 	}
 
 	/**
-	 * Deactivation hook. Intentionally a no-op; uninstall.php handles teardown.
+	 * Deactivation hook. Clears the retention cron; data is preserved.
 	 */
 	public static function deactivate(): void {
-		// No-op. Preserve log + snapshots across deactivation.
+		( new Retention\Scheduler() )->unschedule();
 	}
 
 	/**
