@@ -37,6 +37,7 @@ function abilityguard_uninstall_single_site(): void {
 		$wpdb->prefix . 'abilityguard_log_meta',
 		$wpdb->prefix . 'abilityguard_snapshots',
 		$wpdb->prefix . 'abilityguard_approvals',
+		$wpdb->prefix . 'abilityguard_approval_stages',
 	);
 	foreach ( $tables as $table ) {
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared

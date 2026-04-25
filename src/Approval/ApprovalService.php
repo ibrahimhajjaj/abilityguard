@@ -66,14 +66,15 @@ final class ApprovalService {
 	/**
 	 * Persist a new approval request row.
 	 *
-	 * @param string $ability_name  Registered ability name.
-	 * @param mixed  $input         Original input passed to execute_callback.
-	 * @param string $invocation_id UUID for this invocation.
-	 * @param int    $log_id        Primary key of the log row created for this invocation.
+	 * @param string                          $ability_name  Registered ability name.
+	 * @param mixed                           $input         Original input passed to execute_callback.
+	 * @param string                          $invocation_id UUID for this invocation.
+	 * @param int                             $log_id        Primary key of the log row created for this invocation.
+	 * @param array<int, array{cap?: string}> $stages        Optional multi-stage spec. Empty = single stage with default cap.
 	 *
 	 * @return int Approval row id (0 on failure).
 	 */
-	public function request( string $ability_name, mixed $input, string $invocation_id, int $log_id ): int {
+	public function request( string $ability_name, mixed $input, string $invocation_id, int $log_id, array $stages = array() ): int {
 		global $wpdb;
 		$table = Installer::table( 'approvals' );
 
@@ -102,6 +103,33 @@ final class ApprovalService {
 			return 0;
 		}
 		$approval_id = (int) $wpdb->insert_id;
+
+		// Always write per-stage rows. A single-stage approval (the common
+		// case) is just one row with stage_index=0. This unifies the
+		// state machine - approve/reject never fall through to a legacy
+		// no-stages path.
+		if ( array() === $stages ) {
+			$stages = array( array( 'cap' => CapabilityManager::CAP ) );
+		}
+		$stage_table = Installer::table( 'approval_stages' );
+		foreach ( array_values( $stages ) as $idx => $stage ) {
+			$cap = is_array( $stage ) && isset( $stage['cap'] ) && is_string( $stage['cap'] )
+				? $stage['cap']
+				: CapabilityManager::CAP;
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			$wpdb->insert(
+				$stage_table,
+				array(
+					'approval_id'  => $approval_id,
+					'stage_index'  => $idx,
+					'required_cap' => $cap,
+					'status'       => 0 === $idx ? 'waiting' : 'pending',
+					'decided_by'   => 0,
+					'decided_at'   => null,
+				),
+				array( '%d', '%d', '%s', '%s', '%d', '%s' )
+			);
+		}
 
 		/**
 		 * Fires when a new approval request is recorded.
@@ -135,13 +163,6 @@ final class ApprovalService {
 	 * @return true|WP_Error
 	 */
 	public function approve( int $approval_id, int $user_id ): bool|WP_Error {
-		if ( ! user_can( $user_id, CapabilityManager::CAP ) ) {
-			return new WP_Error(
-				'abilityguard_approve_capability_missing',
-				sprintf( 'User %d does not have the %s capability.', $user_id, CapabilityManager::CAP )
-			);
-		}
-
 		$row = $this->repo->find( $approval_id );
 		if ( null === $row ) {
 			return new WP_Error( 'abilityguard_not_found', 'Approval row not found.' );
@@ -170,6 +191,49 @@ final class ApprovalService {
 			);
 		}
 
+		$active_stage = $this->repo->find_active_stage( $approval_id );
+		if ( null === $active_stage ) {
+			return new WP_Error(
+				'abilityguard_no_active_stage',
+				'Approval has no waiting stage - already fully decided.'
+			);
+		}
+
+		$required_cap = (string) $active_stage['required_cap'];
+		if ( ! user_can( $user_id, $required_cap ) ) {
+			return new WP_Error(
+				'abilityguard_approve_capability_missing',
+				sprintf( 'User %d does not have the %s capability.', $user_id, $required_cap )
+			);
+		}
+
+		$claimed = $this->claim_stage( $approval_id, (int) $active_stage['stage_index'], $user_id, 'approved' );
+		if ( ! $claimed ) {
+			return new WP_Error(
+				'abilityguard_stage_already_decided',
+				'Another approver already decided this stage.'
+			);
+		}
+
+		$next_stage = $this->advance_to_next_stage( $approval_id, (int) $active_stage['stage_index'] );
+		if ( null !== $next_stage ) {
+			/**
+			 * Fires when a multi-stage approval advances to its next stage.
+			 *
+			 * Hook this to re-emit notifications targeted at the new stage's approvers.
+			 *
+			 * @since 1.1.0
+			 *
+			 * @param int                  $approval_id     Approval row id.
+			 * @param int                  $new_stage_index Newly-active stage index.
+			 * @param string               $required_cap    Capability required to act on the new stage.
+			 * @param array<string, mixed> $approval_row    Latest approval row.
+			 */
+			do_action( 'abilityguard_approval_advanced', $approval_id, (int) $next_stage['stage_index'], (string) $next_stage['required_cap'], $row );
+			return true;
+		}
+
+		// Last stage: execute the ability and finalise.
 		$ability_name = (string) $row['ability_name'];
 		$ability      = function_exists( 'wp_get_ability' ) ? wp_get_ability( $ability_name ) : null;
 		if ( null === $ability ) {
@@ -218,6 +282,69 @@ final class ApprovalService {
 	}
 
 	/**
+	 * Atomic stage claim. Updates the stage row's status only if it's
+	 * still 'waiting' - defeats the race where two approvers both click
+	 * Approve at the same instant. The UPDATE-with-WHERE-current-status
+	 * pattern is the standard relational defence; we don't lean on triggers.
+	 *
+	 * @param int    $approval_id Approval id.
+	 * @param int    $stage_index Stage index to claim.
+	 * @param int    $user_id     User making the decision.
+	 * @param string $status      'approved' | 'rejected'.
+	 *
+	 * @return bool True if this call won the race, false otherwise.
+	 */
+	private function claim_stage( int $approval_id, int $stage_index, int $user_id, string $status ): bool {
+		global $wpdb;
+		$table = Installer::table( 'approval_stages' );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$rows = $wpdb->update(
+			$table,
+			array(
+				'status'     => $status,
+				'decided_by' => $user_id,
+				'decided_at' => current_time( 'mysql', true ),
+			),
+			array(
+				'approval_id' => $approval_id,
+				'stage_index' => $stage_index,
+				'status'      => 'waiting',
+			),
+			array( '%s', '%d', '%s' ),
+			array( '%d', '%d', '%s' )
+		);
+		return is_int( $rows ) && $rows > 0;
+	}
+
+	/**
+	 * Promote stage_index+1 from 'pending' to 'waiting'. Returns the new
+	 * active stage row, or null if there is no next stage (i.e. the just-
+	 * approved stage was the last one).
+	 *
+	 * @param int $approval_id     Approval id.
+	 * @param int $current_stage   Stage index that was just decided.
+	 *
+	 * @return array<string, mixed>|null
+	 */
+	private function advance_to_next_stage( int $approval_id, int $current_stage ): ?array {
+		global $wpdb;
+		$table = Installer::table( 'approval_stages' );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$wpdb->update(
+			$table,
+			array( 'status' => 'waiting' ),
+			array(
+				'approval_id' => $approval_id,
+				'stage_index' => $current_stage + 1,
+				'status'      => 'pending',
+			),
+			array( '%s' ),
+			array( '%d', '%d', '%s' )
+		);
+		return $this->repo->find_active_stage( $approval_id );
+	}
+
+	/**
 	 * Reject a pending approval request.
 	 *
 	 * Applies the same three guards as approve(): capability, self-reject, filter.
@@ -228,13 +355,6 @@ final class ApprovalService {
 	 * @return true|WP_Error
 	 */
 	public function reject( int $approval_id, int $user_id ): bool|WP_Error {
-		if ( ! user_can( $user_id, CapabilityManager::CAP ) ) {
-			return new WP_Error(
-				'abilityguard_approve_capability_missing',
-				sprintf( 'User %d does not have the %s capability.', $user_id, CapabilityManager::CAP )
-			);
-		}
-
 		$row = $this->repo->find( $approval_id );
 		if ( null === $row ) {
 			return new WP_Error( 'abilityguard_not_found', 'Approval row not found.' );
@@ -263,13 +383,48 @@ final class ApprovalService {
 			);
 		}
 
-		$now   = current_time( 'mysql', true );
-		$table = Installer::table( 'approvals' );
-		global $wpdb;
+		$active_stage = $this->repo->find_active_stage( $approval_id );
+		if ( null === $active_stage ) {
+			return new WP_Error( 'abilityguard_no_active_stage', 'Approval has no waiting stage.' );
+		}
 
+		$required_cap = (string) $active_stage['required_cap'];
+		if ( ! user_can( $user_id, $required_cap ) ) {
+			return new WP_Error(
+				'abilityguard_approve_capability_missing',
+				sprintf( 'User %d does not have the %s capability.', $user_id, $required_cap )
+			);
+		}
+
+		$claimed = $this->claim_stage( $approval_id, (int) $active_stage['stage_index'], $user_id, 'rejected' );
+		if ( ! $claimed ) {
+			return new WP_Error(
+				'abilityguard_stage_already_decided',
+				'Another approver already decided this stage.'
+			);
+		}
+
+		// Sequential semantics: any reject kills the whole chain. Cancel
+		// every remaining pending stage so the chain can never be
+		// resurrected by an old advance() call.
+		global $wpdb;
+		$stage_table = Installer::table( 'approval_stages' );
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name from Installer::table(), not user input.
+		$wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$stage_table} SET status = %s WHERE approval_id = %d AND status = %s",
+				'cancelled',
+				$approval_id,
+				'pending'
+			)
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		$now            = current_time( 'mysql', true );
+		$approval_table = Installer::table( 'approvals' );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$wpdb->update(
-			$table,
+			$approval_table,
 			array(
 				'status'     => 'rejected',
 				'decided_by' => $user_id,

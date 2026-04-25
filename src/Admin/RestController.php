@@ -464,6 +464,16 @@ final class RestController {
 			$meta[ $key ] = is_array( $decoded ) ? $decoded : $values[0];
 		}
 
+		// Approval row + stage chain when this invocation is gated.
+		$approval      = null;
+		$stages        = array();
+		$approval_repo = new ApprovalRepository();
+		$approval_row  = $approval_repo->find_by_log_id( $id );
+		if ( null !== $approval_row ) {
+			$approval = $approval_row;
+			$stages   = $approval_repo->find_stages( (int) $approval_row['id'] );
+		}
+
 		return new WP_REST_Response(
 			array(
 				'log'      => $row,
@@ -471,6 +481,8 @@ final class RestController {
 				'parent'   => $parent,
 				'children' => $children,
 				'meta'     => $meta,
+				'approval' => $approval,
+				'stages'   => $stages,
 			),
 			200
 		);
@@ -555,7 +567,16 @@ final class RestController {
 			'per_page' => (int) $req->get_param( 'per_page' ),
 			'offset'   => (int) $req->get_param( 'offset' ),
 		);
-		return new WP_REST_Response( $repo->list( $filters ), 200 );
+		$rows    = $repo->list( $filters );
+
+		// Inline the stage chain on each row so the React app can render
+		// "stage N of M" without an extra REST round-trip per approval.
+		foreach ( $rows as &$row ) {
+			$row['stages'] = $repo->find_stages( (int) $row['id'] );
+		}
+		unset( $row );
+
+		return new WP_REST_Response( $rows, 200 );
 	}
 
 	/**

@@ -92,4 +92,52 @@ class ApprovalRepository {
 		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $params ), ARRAY_A );
 		return is_array( $rows ) ? $rows : array();
 	}
+
+	/**
+	 * All stage rows for an approval, ordered by stage_index ascending.
+	 *
+	 * Empty array when the approval is single-stage (legacy v1.0 shape).
+	 *
+	 * @param int $approval_id Approval row id.
+	 *
+	 * @return array<int, array<string, mixed>>
+	 */
+	public function find_stages( int $approval_id ): array {
+		global $wpdb;
+		$table = Installer::table( 'approval_stages' );
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name comes from Installer::table(), not user input.
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$table} WHERE approval_id = %d ORDER BY stage_index ASC",
+				$approval_id
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
+	 * The currently-waiting stage row for an approval, or null when there
+	 * isn't one (single-stage approval, or the chain is already finished).
+	 *
+	 * @param int $approval_id Approval row id.
+	 *
+	 * @return array<string, mixed>|null
+	 */
+	public function find_active_stage( int $approval_id ): ?array {
+		global $wpdb;
+		$table = Installer::table( 'approval_stages' );
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name comes from Installer::table(), not user input.
+		$row = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT * FROM {$table} WHERE approval_id = %d AND status = %s ORDER BY stage_index ASC LIMIT 1",
+				$approval_id,
+				'waiting'
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		return is_array( $row ) ? $row : null;
+	}
 }

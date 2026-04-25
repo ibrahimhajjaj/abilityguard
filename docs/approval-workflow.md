@@ -1,6 +1,28 @@
 # Approval queue: when and how
 
-When `safety.requires_approval => true`, AbilityGuard blocks execution and parks the invocation in a queue until a human decides.
+When `safety.requires_approval` is set, AbilityGuard blocks execution and parks the invocation in a queue until a human decides. Two shapes:
+
+```php
+// Single-stage: any user with manage_abilityguard_approvals can decide.
+'safety' => array( 'requires_approval' => true ),
+
+// Multi-stage (v1.1+): each stage declares its own required capability.
+// Sequential - stage N+1 only becomes "waiting" once stage N is approved.
+// Any reject at any stage kills the chain (cancels remaining pending stages).
+'safety' => array(
+    'requires_approval' => array(
+        'stages' => array(
+            array( 'cap' => 'manage_abilityguard_approvals' ),  // stage 0
+            array( 'cap' => 'edit_others_posts' ),              // stage 1
+            array( 'cap' => 'manage_options' ),                 // stage 2 (final)
+        ),
+    ),
+),
+```
+
+Single-stage and multi-stage approvals share the same code path internally - every approval has at least one stage row. The `true` form is sugar for `[['cap' => 'manage_abilityguard_approvals']]`.
+
+Each stage advancement fires `abilityguard_approval_advanced( $approval_id, $new_stage_index, $required_cap, $approval_row )` so notification handlers (Slack, email, etc.) can re-emit messages targeted at the next stage's approver pool.
 
 ## When to use `requires_approval`
 

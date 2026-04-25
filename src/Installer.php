@@ -22,7 +22,7 @@ namespace AbilityGuard;
 final class Installer {
 
 	public const DB_VERSION_OPTION = 'abilityguard_db_version';
-	public const DB_VERSION        = '3';
+	public const DB_VERSION        = '4';
 
 	/**
 	 * Activation hook.
@@ -143,7 +143,7 @@ final class Installer {
 			'wpmu_drop_tables',
 			static function ( array $tables ): array {
 				global $wpdb;
-				foreach ( array( 'abilityguard_log', 'abilityguard_log_meta', 'abilityguard_snapshots', 'abilityguard_approvals' ) as $name ) {
+				foreach ( array( 'abilityguard_log', 'abilityguard_log_meta', 'abilityguard_snapshots', 'abilityguard_approvals', 'abilityguard_approval_stages' ) as $name ) {
 					$tables[] = $wpdb->prefix . $name;
 				}
 				return $tables;
@@ -177,6 +177,7 @@ final class Installer {
 		$log_meta        = $wpdb->prefix . 'abilityguard_log_meta';
 		$snapshots       = $wpdb->prefix . 'abilityguard_snapshots';
 		$approvals       = $wpdb->prefix . 'abilityguard_approvals';
+		$approval_stages = $wpdb->prefix . 'abilityguard_approval_stages';
 
 		$sql = array();
 
@@ -245,6 +246,23 @@ final class Installer {
 			KEY ability_name (ability_name)
 		) {$charset_collate};";
 
+		// Per-stage rows for multi-stage approvals (v1.1+). Single-stage
+		// approvals (default `safety.requires_approval = true`) write zero
+		// rows here and the existing approvals.status field tracks the
+		// whole decision - preserves v1.0 behavior exactly.
+		$sql[] = "CREATE TABLE {$approval_stages} (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			approval_id bigint(20) unsigned NOT NULL,
+			stage_index smallint(5) unsigned NOT NULL,
+			required_cap varchar(191) NOT NULL,
+			status varchar(20) NOT NULL DEFAULT 'pending',
+			decided_by bigint(20) unsigned NOT NULL DEFAULT 0,
+			decided_at datetime NULL,
+			PRIMARY KEY  (id),
+			UNIQUE KEY approval_stage (approval_id, stage_index),
+			KEY status (status)
+		) {$charset_collate};";
+
 		foreach ( $sql as $statement ) {
 			dbDelta( $statement );
 		}
@@ -255,7 +273,7 @@ final class Installer {
 	/**
 	 * Table name helper.
 	 *
-	 * @param 'log'|'log_meta'|'snapshots'|'approvals' $which Table key.
+	 * @param 'log'|'log_meta'|'snapshots'|'approvals'|'approval_stages' $which Table key.
 	 */
 	public static function table( string $which ): string {
 		global $wpdb;

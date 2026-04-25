@@ -2,7 +2,7 @@
 
 Snapshot + audit + rollback + approval middleware for the WordPress Abilities API.
 
-**Status:** v1.0-dev. extensibility for custom collectors, real byte-level file rollback via `safety.snapshot.files.strategy = 'full_content'`, and full multisite support.
+**Status:** v1.1-dev. extensibility for custom collectors, real byte-level file rollback via `safety.snapshot.files.strategy = 'full_content'`, full multisite support, and sequential multi-stage approval chains.
 
 ## What it is
 
@@ -114,7 +114,7 @@ If you use Claude Code worktrees, drop a local `phpcs.xml` (not committed) so PH
 ## Known limitations
 
 - **File-content rollback is opt-in via `strategy => 'full_content'`.** The four fingerprint strategies (`mtime`, `mtime_size`, `critical_hash`, `full_hash`) detect drift and fire `abilityguard_files_changed_since_snapshot` / `abilityguard_files_deleted_since_snapshot` on restore but don't rewrite bytes. The fifth strategy `full_content` actually captures and restores file contents - encrypted (AES-256-GCM), content-addressed in a sidecar staging dir, atomic temp-file+rename writes, octal-mode preserved, 256 KB per-file cap by default. Files over the cap fall back to fingerprint-only.
-- **Approval queue is single-step.** Multi-stage approval (e.g. requester → reviewer → final approver) is not modeled. Each `requires_approval` ability has exactly one approve/reject decision.
+- **Approval queue supports multi-stage chains.** Set `safety.requires_approval = ['stages' => [['cap' => 'X'], ['cap' => 'Y']]]` to require sequential approvals from different capability pools. `safety.requires_approval = true` stays as the single-stage shorthand. Sequential semantics - any reject kills the chain. Parallel ("N of M must approve") is not modeled.
 - **Multisite cron requires a real cronjob.** WP-Cron is visit-driven; on low-traffic subsites it lags. Production deployments should call `wp abilityguard prune --all-sites` from a real system cron. See [docs/multisite.md](docs/multisite.md).
 
 ## Schema

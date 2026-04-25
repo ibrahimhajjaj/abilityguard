@@ -38,7 +38,7 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 |---|---|---|
 | `destructive` | 0.1 | bool |
 | `snapshot` | 0.1 | array \| callable returning the spec |
-| `requires_approval` | 0.2 | bool |
+| `requires_approval` | 0.2 | `bool \| array{stages: array<int, array{cap: string}>}` - `true` is single-stage with the default `manage_abilityguard_approvals` cap. The array form opts into a multi-stage chain; each stage entry sets the capability required to act on that stage. Sequential semantics: any reject kills the chain. (1.1+) |
 | `redact` | 0.3 | array - sub-keys: `input`, `result`, `surfaces` (each: string[] of dot-paths) |
 | `scrub` | 0.3 | callable - receives `(mixed $value, string $kind)`, returns redacted value |
 | `max_payload_bytes` | 0.3 | int - 0 disables truncation |
@@ -66,6 +66,7 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `abilityguard_files_changed_since_snapshot` | 0.2 | `( string[] $changed_paths )` |
 | `abilityguard_files_deleted_since_snapshot` | 0.7 | `( string[] $deleted_paths )` - strict subset of changed paths: existed at snapshot, gone now |
 | `abilityguard_files_restored` | 0.9 | `( string[] $restored_paths )` - fired after FilesCollector successfully rewrote one or more files from a `full_content` capture |
+| `abilityguard_approval_advanced` | 1.1 | `( int $approval_id, int $new_stage_index, string $required_cap, array $approval_row )` - fired when a multi-stage approval advances to its next waiting stage |
 | `abilityguard_retention_prune` | 0.2 | `()` - daily WP cron hook running `RetentionService::prune()` |
 | `abilityguard_bulk_rollback_complete` | 0.4 | `( array $summary )` |
 | `abilityguard_approval_requested` | 0.5 | `( int $approval_id, string $ability_name, int $log_id, mixed $input, string $invocation_id )` |

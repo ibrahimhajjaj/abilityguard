@@ -1420,8 +1420,30 @@ function ApprovalsView({ store, focusApprovalId = null }) {
             <div className="dim" style={{ fontSize: 11.5, marginTop: 2 }}>
               Approval #{appr.id}
               {appr.log_id ? <> · Invocation #{appr.log_id}</> : ""}
+              {Array.isArray(appr.stages) && appr.stages.length > 1 && (() => {
+                const total = appr.stages.length;
+                const active = appr.stages.find((s) => s.status === "waiting");
+                const idx = active ? Number(active.stage_index) + 1 : total;
+                return <> · stage <strong>{idx}</strong> of {total}</>;
+              })()}
               {appr.created_at ? <> · {relativeWhen(appr.created_at.replace(" ", "T") + "Z", Date.now())}</> : ""}
             </div>
+            {Array.isArray(appr.stages) && appr.stages.length > 1 && (
+              <div style={{ display: "flex", gap: 4, marginTop: 6 }}>
+                {appr.stages.map((s) => {
+                  const dot = s.status === "approved" ? "var(--ok-fg)"
+                    : s.status === "rejected" || s.status === "cancelled" ? "var(--err-fg)"
+                    : s.status === "waiting" ? "var(--accent)"
+                    : "var(--ink-3)";
+                  return (
+                    <span key={s.id}
+                      title={`stage ${Number(s.stage_index) + 1}: ${s.status} · cap ${s.required_cap}`}
+                      style={{ width: 8, height: 8, borderRadius: 4, background: dot, opacity: s.status === "pending" ? 0.4 : 1 }}
+                    />
+                  );
+                })}
+              </div>
+            )}
           </div>
           <button
             className="btn btn-sm"

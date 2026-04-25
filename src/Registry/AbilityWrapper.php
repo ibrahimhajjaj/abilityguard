@@ -134,8 +134,19 @@ final class AbilityWrapper {
 				}
 				$lock_key = null;
 
+				// `safety.requires_approval` accepts:
+				// - true / truthy scalar → single stage with default cap
+				// - array{stages: array<int, array{cap: string}>} → multi-stage chain
+				$stages = array();
+				if ( is_array( $this->safety['requires_approval'] ?? null )
+					&& isset( $this->safety['requires_approval']['stages'] )
+					&& is_array( $this->safety['requires_approval']['stages'] )
+				) {
+					$stages = $this->safety['requires_approval']['stages'];
+				}
+
 				$approval_service = new ApprovalService();
-				$approval_id      = $approval_service->request( $this->ability_name, $input, $invocation_id, $log_id );
+				$approval_id      = $approval_service->request( $this->ability_name, $input, $invocation_id, $log_id, $stages );
 
 				return new WP_Error(
 					'abilityguard_pending_approval',
