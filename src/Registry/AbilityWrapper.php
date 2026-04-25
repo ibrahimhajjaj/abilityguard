@@ -11,6 +11,7 @@ declare( strict_types=1 );
 namespace AbilityGuard\Registry;
 
 use AbilityGuard\Approval\ApprovalService;
+use AbilityGuard\Concurrency\Lock;
 use AbilityGuard\Contracts\AuditLoggerInterface;
 use AbilityGuard\Contracts\SnapshotServiceInterface;
 use AbilityGuard\Support\Cipher;
@@ -65,7 +66,37 @@ final class AbilityWrapper {
 			$destructive       = (bool) ( $this->safety['destructive'] ?? false );
 			$requires_approval = ! empty( $this->safety['requires_approval'] );
 
+			// ---------------------------------------------------------------
+			// Advisory lock: serialise all invocations that share the same
+			// snapshot surfaces so capture+execute is atomic per surface set.
+			// ---------------------------------------------------------------
+			$lock_key     = null;
+			$lock_timeout = $this->resolve_lock_timeout();
+			$has_spec     = ! empty( $this->safety['snapshot'] );
+
+			if ( $has_spec && $lock_timeout >= 0 ) {
+				$resolved_spec = $this->resolve_spec_for_lock( $input );
+
+				if ( array() !== $resolved_spec ) {
+					$lock_key = Lock::key_for_spec( $resolved_spec );
+
+					if ( ! Lock::acquire( $lock_key, $lock_timeout ) ) {
+						// Another invocation holds the lock - reject immediately.
+						// No log row, no snapshot.
+						return new WP_Error(
+							'abilityguard_lock_timeout',
+							'Another invocation is in progress for the same surfaces. Please retry.',
+							array( 'status' => 429 )
+						);
+					}
+				}
+			}
+
+			// ---------------------------------------------------------------
 			// Approval gate: block execution, log as pending, return WP_Error(202).
+			// Lock is held here so pending-row writes are also serialised; we
+			// release immediately after audit->log() since no execution follows.
+			// ---------------------------------------------------------------
 			if ( $requires_approval && ! ApprovalService::is_approving() ) {
 				$snapshot = $this->snapshots->capture( $invocation_id, $this->safety, $input );
 
@@ -86,6 +117,12 @@ final class AbilityWrapper {
 					)
 				);
 
+				// Release lock before returning - no execution will follow.
+				if ( null !== $lock_key ) {
+					Lock::release( $lock_key );
+					$lock_key = null;
+				}
+
 				$approval_service = new ApprovalService();
 				$approval_id      = $approval_service->request( $this->ability_name, $input, $invocation_id, $log_id );
 
@@ -100,73 +137,123 @@ final class AbilityWrapper {
 				);
 			}
 
-			$snapshot = $this->snapshots->capture( $invocation_id, $this->safety, $input );
-
-			$start  = hrtime( true );
-			$result = null;
-			$status = 'ok';
-			$thrown = null;
+			// ---------------------------------------------------------------
+			// Execute under the lock (released in the finally block).
+			// ---------------------------------------------------------------
 			try {
-				$result = $original_callback( $input );
-				if ( is_wp_error( $result ) ) {
+				$snapshot = $this->snapshots->capture( $invocation_id, $this->safety, $input );
+
+				$start  = hrtime( true );
+				$result = null;
+				$status = 'ok';
+				$thrown = null;
+				try {
+					$result = $original_callback( $input );
+					if ( is_wp_error( $result ) ) {
+						$status = 'error';
+					}
+				} catch ( Throwable $e ) {
 					$status = 'error';
+					$thrown = $e;
 				}
-			} catch ( Throwable $e ) {
-				$status = 'error';
-				$thrown = $e;
+				$duration_ms = (int) ( ( hrtime( true ) - $start ) / 1_000_000 );
+
+				if ( 'ok' === $status && null !== $snapshot['snapshot_id'] ) {
+					$this->snapshots->capture_post( $snapshot['snapshot_id'], $this->safety, $input );
+				}
+
+				$mcp_id      = McpContext::current();
+				$caller_type = null !== $mcp_id ? 'mcp' : self::detect_caller_type();
+
+				// Hash BEFORE redaction so hashes reflect real values.
+				$post_hash     = self::hash_or_null( $result );
+				$logged_input  = $this->redact_value( $input, 'input' );
+				$logged_result = $thrown ? null : $this->redact_value( $result, 'result' );
+
+				// Encode → cap. Caps run on the JSON-encoded (redacted) form so
+				// truncation marker reflects what's actually being stored.
+				$args_json   = self::encode_or_null( $logged_input );
+				$result_json = $thrown ? null : self::encode_or_null( $logged_result );
+
+				$args_limit   = self::resolve_payload_limit( $this->safety, 'abilityguard_max_args_bytes', 65536 );
+				$result_limit = self::resolve_payload_limit( $this->safety, 'abilityguard_max_result_bytes', 131072 );
+
+				$capped_args   = PayloadCap::cap_json( 'args', $args_json, $args_limit );
+				$capped_result = PayloadCap::cap_json( 'result', $result_json, $result_limit );
+
+				if ( $capped_args['truncated'] || $capped_result['truncated'] ) {
+					self::maybe_doing_it_wrong( $this->ability_name );
+				}
+
+				$this->audit->log(
+					array(
+						'invocation_id' => $invocation_id,
+						'ability_name'  => $this->ability_name,
+						'caller_type'   => $caller_type,
+						'caller_id'     => $mcp_id,
+						'user_id'       => self::current_user_id(),
+						'args_json'     => $capped_args['json'],
+						'result_json'   => $capped_result['json'],
+						'status'        => $status,
+						'destructive'   => $destructive,
+						'duration_ms'   => $duration_ms,
+						'pre_hash'      => $snapshot['pre_hash'],
+						'post_hash'     => $post_hash,
+						'snapshot_id'   => $snapshot['snapshot_id'],
+					)
+				);
+
+				if ( null !== $thrown ) {
+					throw $thrown;
+				}
+				return $result;
+			} finally {
+				if ( null !== $lock_key ) {
+					Lock::release( $lock_key );
+				}
 			}
-			$duration_ms = (int) ( ( hrtime( true ) - $start ) / 1_000_000 );
-
-			if ( 'ok' === $status && null !== $snapshot['snapshot_id'] ) {
-				$this->snapshots->capture_post( $snapshot['snapshot_id'], $this->safety, $input );
-			}
-
-			$mcp_id      = McpContext::current();
-			$caller_type = null !== $mcp_id ? 'mcp' : self::detect_caller_type();
-
-			// Hash BEFORE redaction so hashes reflect real values.
-			$post_hash     = self::hash_or_null( $result );
-			$logged_input  = $this->redact_value( $input, 'input' );
-			$logged_result = $thrown ? null : $this->redact_value( $result, 'result' );
-
-			// Encode → cap. Caps run on the JSON-encoded (redacted) form so
-			// truncation marker reflects what's actually being stored.
-			$args_json   = self::encode_or_null( $logged_input );
-			$result_json = $thrown ? null : self::encode_or_null( $logged_result );
-
-			$args_limit   = self::resolve_payload_limit( $this->safety, 'abilityguard_max_args_bytes', 65536 );
-			$result_limit = self::resolve_payload_limit( $this->safety, 'abilityguard_max_result_bytes', 131072 );
-
-			$capped_args   = PayloadCap::cap_json( 'args', $args_json, $args_limit );
-			$capped_result = PayloadCap::cap_json( 'result', $result_json, $result_limit );
-
-			if ( $capped_args['truncated'] || $capped_result['truncated'] ) {
-				self::maybe_doing_it_wrong( $this->ability_name );
-			}
-
-			$this->audit->log(
-				array(
-					'invocation_id' => $invocation_id,
-					'ability_name'  => $this->ability_name,
-					'caller_type'   => $caller_type,
-					'caller_id'     => $mcp_id,
-					'user_id'       => self::current_user_id(),
-					'args_json'     => $capped_args['json'],
-					'result_json'   => $capped_result['json'],
-					'status'        => $status,
-					'destructive'   => $destructive,
-					'duration_ms'   => $duration_ms,
-					'pre_hash'      => $snapshot['pre_hash'],
-					'post_hash'     => $post_hash,
-					'snapshot_id'   => $snapshot['snapshot_id'],
-				)
-			);
-
-			if ( null !== $thrown ) {
-				throw $thrown;
-			}
-			return $result;
 		};
+	}
+
+	/**
+	 * Resolve the effective lock timeout from safety config and filter.
+	 *
+	 * Resolution order:
+	 *  1. `safety.lock_timeout` (per-ability override). Negative = lock disabled.
+	 *  2. `apply_filters( 'abilityguard_lock_timeout', 5 )`.
+	 *
+	 * @return int Effective timeout in seconds. Negative = lock disabled.
+	 */
+	private function resolve_lock_timeout(): int {
+		if ( array_key_exists( 'lock_timeout', $this->safety ) ) {
+			return (int) $this->safety['lock_timeout'];
+		}
+		return (int) apply_filters( 'abilityguard_lock_timeout', 5 );
+	}
+
+	/**
+	 * Resolve the snapshot spec for computing the lock key.
+	 *
+	 * Mirrors SnapshotService::resolve_spec() but kept here to avoid a
+	 * cross-service dependency just for key derivation.
+	 *
+	 * @param mixed $input Ability input.
+	 *
+	 * @return array<string, mixed> Resolved spec; empty array if no snapshot configured.
+	 */
+	private function resolve_spec_for_lock( mixed $input ): array {
+		if ( empty( $this->safety['snapshot'] ) ) {
+			return array();
+		}
+		$snapshot = $this->safety['snapshot'];
+		if ( is_callable( $snapshot ) ) {
+			$resolved = $snapshot( $input );
+			return is_array( $resolved ) ? $resolved : array();
+		}
+		if ( is_array( $snapshot ) ) {
+			return $snapshot;
+		}
+		return array();
 	}
 
 	/**
