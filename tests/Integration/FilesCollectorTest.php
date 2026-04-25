@@ -15,7 +15,11 @@ use WP_UnitTestCase;
  */
 final class FilesCollectorTest extends WP_UnitTestCase {
 
-	/** @var string[] */
+	/**
+	 * Tracked tmp file paths to clean up on tearDown.
+	 *
+	 * @var string[]
+	 */
 	private array $tmp_files = array();
 
 	protected function setUp(): void {
