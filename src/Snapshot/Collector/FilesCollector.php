@@ -15,7 +15,7 @@ namespace AbilityGuard\Snapshot\Collector;
  * Files are not restored. This collector exists so the audit log can record file
  * changes; a future major version may implement actual file rollback.
  *
- * ## Detection strategies (lifted from SafeGuard's File_Scanner tiers)
+ * ## Detection strategies
  *
  * Choose how aggressively the collector compares captured vs current state.
  * Each tier is progressively more expensive; pick based on file count and
@@ -81,9 +81,9 @@ final class FilesCollector implements CollectorInterface {
 	private const DEFAULT_MAX_FILE_BYTES = 262144; // 256 KB
 
 	/**
-	 * Other-plugin backup directories we exclude by default. Lifted from
-	 * SafeGuard's `File_Scanner::$exclude_patterns`. Plugin authors can extend
-	 * via `safety.snapshot.files.exclude_dirs` or the
+	 * Third-party archive directories we exclude by default - backup-plugin
+	 * archives that callers almost never mean to snapshot. Plugin authors
+	 * can extend via `safety.snapshot.files.exclude_dirs` or the
 	 * `abilityguard_files_default_exclude_dirs` filter.
 	 *
 	 * @var string[]
@@ -326,11 +326,9 @@ final class FilesCollector implements CollectorInterface {
 	}
 
 	/**
-	 * SafeGuard-style path validation: reject `..`, null bytes, and
-	 * confirm the resolved target stays within ABSPATH.
-	 *
-	 * Mirrors the `is_safe_path()` helper in SafeGuard's File_Restorer
-	 * (see plugin/includes/restore/class-file-restorer.php).
+	 * Path validation: reject `..`, null bytes, and confirm the resolved
+	 * target stays within ABSPATH. Defends against a malicious snapshot
+	 * row coercing a write outside the install during restore.
 	 *
 	 * @param string $path Absolute path to validate.
 	 */

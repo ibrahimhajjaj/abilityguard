@@ -18,10 +18,10 @@ use RuntimeException;
  * ## Why a sidecar dir, not a DB blob column
  *
  * File contents have very different size + retention characteristics from
- * the option/meta scalars in the snapshots table. SafeGuard learned this
- * the hard way: blobbing into a DB column inflates row sizes, hurts query
- * performance, and makes retention sweeps expensive. Filesystem storage
- * with content-addressed filenames lets us:
+ * the option/meta scalars in the snapshots table. Blobbing into a DB
+ * column inflates row sizes, hurts query performance, and makes
+ * retention sweeps expensive. Filesystem storage with content-addressed
+ * filenames lets us:
  *
  *  - Dedupe: identical blobs share a single file (e.g. all snapshots of an
  *    unchanged `.htaccess` reuse the same hash-keyed file).
@@ -57,8 +57,8 @@ final class FileBlobStore {
 
 		if ( ! is_dir( $dir ) ) {
 			wp_mkdir_p( $dir );
-			// Drop a sentinel so this dir is never confused with a backup-plugin
-			// archive directory by FilesCollector::BACKUP_PLUGIN_EXCLUDES.
+			// Drop sentinel + .htaccess so this dir is never confused with
+			// a third-party archive directory by the FilesCollector excludes.
 			$marker = trailingslashit( $dir ) . 'index.html';
 			if ( ! file_exists( $marker ) ) {
 				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents

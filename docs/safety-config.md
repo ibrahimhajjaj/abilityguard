@@ -241,7 +241,7 @@ wp_register_ability( 'acme-shop/update-product-price', array(
 
 **Captures:** for each path: `exists`, `sha256` (only when the strategy hashes), `size`, `mtime`.
 
-**Detection strategies** (lifted from SafeGuard's tiered scanner):
+**Detection strategies:**
 
 | Strategy | Hashes | Use when |
 |---|---|---|
