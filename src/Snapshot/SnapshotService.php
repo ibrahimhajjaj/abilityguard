@@ -16,6 +16,7 @@ use AbilityGuard\Snapshot\Collector\OptionsCollector;
 use AbilityGuard\Snapshot\Collector\PostMetaCollector;
 use AbilityGuard\Snapshot\Collector\TaxonomyCollector;
 use AbilityGuard\Snapshot\Collector\UserRoleCollector;
+use AbilityGuard\Support\Cipher;
 use AbilityGuard\Support\Hash;
 use AbilityGuard\Support\PayloadCap;
 use AbilityGuard\Support\Redactor;
@@ -181,10 +182,10 @@ final class SnapshotService implements SnapshotServiceInterface {
 	/**
 	 * Apply surface-level redaction to captured surfaces before storing.
 	 *
-	 * Redaction trade-off (v0.3): storing the sentinel means rollback cannot
-	 * restore redacted keys. RollbackService detects '[redacted]' values and
-	 * skips them, returning WP_Error 'abilityguard_rollback_partial' unless
-	 * the caller passes force=true.
+	 * In v0.4 the default strategy is 'encrypt': sensitive values are replaced
+	 * with a Cipher envelope so RollbackService can decrypt and restore them.
+	 * The legacy 'placeholder' strategy (v0.3) can be opted into via the
+	 * 'abilityguard_redaction_strategy' filter.
 	 *
 	 * @param array<string, mixed> $surfaces Raw captured surfaces.
 	 * @param array<string, mixed> $safety   Safety config.
@@ -197,9 +198,9 @@ final class SnapshotService implements SnapshotServiceInterface {
 			? (array) apply_filters( 'abilityguard_redact_keys', $default_keys, 'surfaces' )
 			: $default_keys;
 
-		$placeholder = function_exists( 'apply_filters' )
-			? (string) apply_filters( 'abilityguard_redaction_placeholder', Redactor::SENTINEL )
-			: Redactor::SENTINEL;
+		$strategy = function_exists( 'apply_filters' )
+			? (string) apply_filters( 'abilityguard_redaction_strategy', 'encrypt' )
+			: 'encrypt';
 
 		$per_surface = array();
 		if ( isset( $safety['redact']['surfaces'] ) && is_array( $safety['redact']['surfaces'] ) ) {
@@ -219,7 +220,20 @@ final class SnapshotService implements SnapshotServiceInterface {
 				continue;
 			}
 
-			$result[ $surface ] = Redactor::redact( $data, $all_paths, $placeholder );
+			if ( 'encrypt' === $strategy ) {
+				$result[ $surface ] = Redactor::redact(
+					$data,
+					$all_paths,
+					Redactor::SENTINEL,
+					static fn( mixed $v ): array => Cipher::encrypt( $v )
+				);
+			} else {
+				$placeholder = function_exists( 'apply_filters' )
+					? (string) apply_filters( 'abilityguard_redaction_placeholder', Redactor::SENTINEL )
+					: Redactor::SENTINEL;
+
+				$result[ $surface ] = Redactor::redact( $data, $all_paths, $placeholder );
+			}
 		}
 
 		return $result;

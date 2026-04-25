@@ -18,8 +18,10 @@ use AbilityGuard\Snapshot\Collector\PostMetaCollector;
 use AbilityGuard\Snapshot\Collector\TaxonomyCollector;
 use AbilityGuard\Snapshot\Collector\UserRoleCollector;
 use AbilityGuard\Snapshot\SnapshotStore;
+use AbilityGuard\Support\Cipher;
 use AbilityGuard\Support\Hash;
 use AbilityGuard\Support\Redactor;
+use RuntimeException;
 use WP_Error;
 
 /**
@@ -155,17 +157,25 @@ final class RollbackService {
 			);
 		}
 
-		// --- Restore (skips redacted keys) ------------------------------------
-		$skipped = array(); // Keys not restored because their value is the redaction sentinel.
+		// --- Restore (decrypt envelopes; skip v0.3 sentinels) ----------------
+		$skipped = array(); // Keys not restored due to failed decryption or v0.3 sentinel.
 		foreach ( $snapshot['surfaces'] as $surface => $captured ) {
 			if ( ! isset( $this->collectors[ $surface ] ) || ! is_array( $captured ) ) {
 				continue;
 			}
 
-			// Strip redacted entries; collect them in $skipped for the partial report.
 			$restorable = array();
 			foreach ( $captured as $key => $entry ) {
-				if ( $this->surface_entry_is_redacted( $entry ) ) {
+				if ( Cipher::is_envelope( $entry ) ) {
+					// v0.4 encrypted envelope: decrypt before restoring.
+					try {
+						$restorable[ $key ] = Cipher::decrypt( $entry );
+					} catch ( RuntimeException $e ) {
+						// Key rotated or tampered - skip and report.
+						$skipped[] = "{$surface}.{$key}";
+					}
+				} elseif ( $this->surface_entry_is_redacted( $entry ) ) {
+					// v0.3 plain sentinel - cannot restore.
 					$skipped[] = "{$surface}.{$key}";
 				} else {
 					$restorable[ $key ] = $entry;

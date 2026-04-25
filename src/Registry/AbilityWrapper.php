@@ -13,6 +13,7 @@ namespace AbilityGuard\Registry;
 use AbilityGuard\Approval\ApprovalService;
 use AbilityGuard\Contracts\AuditLoggerInterface;
 use AbilityGuard\Contracts\SnapshotServiceInterface;
+use AbilityGuard\Support\Cipher;
 use AbilityGuard\Support\Hash;
 use AbilityGuard\Support\Json;
 use AbilityGuard\Support\PayloadCap;
@@ -282,6 +283,15 @@ final class AbilityWrapper {
 			return $value;
 		}
 
+		$strategy = function_exists( 'apply_filters' )
+			? (string) apply_filters( 'abilityguard_redaction_strategy', 'encrypt' )
+			: 'encrypt';
+
+		if ( 'encrypt' === $strategy ) {
+			return Redactor::redact( $value, $all_paths, Redactor::SENTINEL, static fn( mixed $v ): array => Cipher::encrypt( $v ) );
+		}
+
+		// Placeholder (legacy v0.3) path.
 		$placeholder = function_exists( 'apply_filters' )
 			? (string) apply_filters( 'abilityguard_redaction_placeholder', Redactor::SENTINEL )
 			: Redactor::SENTINEL;

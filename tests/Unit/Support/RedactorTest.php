@@ -186,4 +186,90 @@ final class RedactorTest extends TestCase {
 		$this->assertSame( Redactor::SENTINEL, $result->password );
 		$this->assertSame( 'alice', $result->name );
 	}
+
+	public function test_sentinel_key_constant_value(): void {
+		$this->assertSame( '_abilityguard_redacted', Redactor::SENTINEL_KEY );
+	}
+
+	public function test_transform_callable_invoked_on_matching_key(): void {
+		$called_with = array();
+		$transform   = static function ( mixed $v ) use ( &$called_with ): array {
+			$called_with[] = $v;
+			return array(
+				'encrypted' => true,
+				'value'     => $v,
+			);
+		};
+
+		$input  = array(
+			'password' => 'secret',
+			'user'     => 'alice',
+		);
+		$result = Redactor::redact( $input, array( 'password' ), Redactor::SENTINEL, $transform );
+
+		$this->assertCount( 1, $called_with );
+		$this->assertSame( 'secret', $called_with[0] );
+		$this->assertSame(
+			array(
+				'encrypted' => true,
+				'value'     => 'secret',
+			),
+			$result['password']
+		);
+		$this->assertSame( 'alice', $result['user'] );
+	}
+
+	public function test_transform_not_invoked_on_non_matching_keys(): void {
+		$call_count = 0;
+		$transform  = static function ( mixed $v ) use ( &$call_count ): string {
+			++$call_count;
+			return 'ENCRYPTED';
+		};
+
+		$input = array(
+			'username' => 'alice',
+			'email'    => 'alice@example.com',
+		);
+		Redactor::redact( $input, array( 'password' ), Redactor::SENTINEL, $transform );
+
+		$this->assertSame( 0, $call_count );
+	}
+
+	public function test_transform_receives_original_value_for_dot_path(): void {
+		$received  = null;
+		$transform = static function ( mixed $v ) use ( &$received ): string {
+			$received = $v;
+			return 'ENCRYPTED';
+		};
+
+		$input  = array(
+			'actor' => array(
+				'token' => 'raw-token',
+				'name'  => 'alice',
+			),
+		);
+		$result = Redactor::redact( $input, array( 'actor.token' ), Redactor::SENTINEL, $transform );
+
+		$this->assertSame( 'raw-token', $received );
+		$this->assertSame( 'ENCRYPTED', $result['actor']['token'] );
+		$this->assertSame( 'alice', $result['actor']['name'] );
+	}
+
+	public function test_null_transform_uses_placeholder(): void {
+		$input  = array( 'password' => 'secret' );
+		$result = Redactor::redact( $input, array( 'password' ), '***', null );
+
+		$this->assertSame( '***', $result['password'] );
+	}
+
+	public function test_placeholder_path_still_works_without_transform(): void {
+		$input  = array(
+			'api_key' => 'abc123',
+			'data'    => 'ok',
+		);
+		$result = Redactor::redact( $input, array( 'api_key' ) );
+
+		$this->assertSame( Redactor::SENTINEL, $result['api_key'] );
+		$this->assertSame( 'ok', $result['data'] );
+	}
 }
