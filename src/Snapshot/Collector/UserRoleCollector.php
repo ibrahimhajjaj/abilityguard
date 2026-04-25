@@ -72,8 +72,10 @@ final class UserRoleCollector implements CollectorInterface {
 				continue;
 			}
 
-			// Clear all existing roles.
-			$user->set_role( '' );
+			// Clear all existing roles AND custom caps so the captured state
+			// fully replaces the live state. set_role('') only clears roles;
+			// remove_all_caps() also wipes caps added via add_cap().
+			$user->remove_all_caps();
 
 			// Restore each captured role.
 			$roles = isset( $state['roles'] ) && is_array( $state['roles'] ) ? $state['roles'] : array();

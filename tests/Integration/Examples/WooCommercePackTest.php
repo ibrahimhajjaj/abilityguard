@@ -27,6 +27,9 @@ final class WooCommercePackTest extends WP_UnitTestCase {
 		}
 		Installer::install();
 		$this->ensure_acme_shop_category();
+		// Ability requires manage_options; satisfy that.
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
 	}
 
 	private function ensure_acme_shop_category(): void {
@@ -50,8 +53,11 @@ final class WooCommercePackTest extends WP_UnitTestCase {
 
 	private function register_via_init( string $name, callable $build ): \WP_Ability {
 		$registry = WP_Abilities_Registry::get_instance();
-		$args     = $build( $registry );
-		$result   = $registry->register( $name, $args );
+		if ( $registry->is_registered( $name ) ) {
+			return $registry->get_registered( $name );
+		}
+		$args   = $build( $registry );
+		$result = $registry->register( $name, $args );
 		if ( null === $result ) {
 			$this->fail(
 				"register() returned null for {$name}. Category registered? "
