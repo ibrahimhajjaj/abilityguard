@@ -9,9 +9,11 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Admin;
 
+use AbilityGuard\Approval\ApprovalRepository;
 use AbilityGuard\Approval\ApprovalService;
 use AbilityGuard\Approval\CapabilityManager;
 use AbilityGuard\Audit\LogRepository;
+use AbilityGuard\Retention\RetentionService;
 use AbilityGuard\Rollback\BulkRollbackService;
 use AbilityGuard\Rollback\RollbackService;
 use AbilityGuard\Snapshot\SnapshotStore;
@@ -26,8 +28,10 @@ use WP_REST_Server;
  *  - GET  /abilityguard/v1/log/<id>
  *  - POST /abilityguard/v1/rollback/<id>
  *  - POST /abilityguard/v1/rollback/bulk           (manage_options)
+ *  - GET  /abilityguard/v1/approval                (manage_abilityguard_approvals)
  *  - POST /abilityguard/v1/approval/<id>/approve   (manage_abilityguard_approvals)
  *  - POST /abilityguard/v1/approval/<id>/reject    (manage_abilityguard_approvals)
+ *  - GET  /abilityguard/v1/retention               (manage_options)
  */
 final class RestController {
 
@@ -114,6 +118,43 @@ final class RestController {
 						'sanitize_callback' => 'rest_sanitize_boolean',
 					),
 				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/approval',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'permission_callback' => array( __CLASS__, 'check_approval_perms' ),
+				'callback'            => array( __CLASS__, 'list_approvals' ),
+				'args'                => array(
+					'status'   => array(
+						'type'    => 'string',
+						'default' => 'pending',
+					),
+					'per_page' => array(
+						'type'    => 'integer',
+						'default' => 50,
+						'minimum' => 1,
+						'maximum' => 500,
+					),
+					'offset'   => array(
+						'type'    => 'integer',
+						'default' => 0,
+						'minimum' => 0,
+					),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/retention',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'permission_callback' => array( __CLASS__, 'check_perms' ),
+				'callback'            => array( __CLASS__, 'get_retention' ),
 			)
 		);
 
@@ -257,6 +298,45 @@ final class RestController {
 		$summary = $service->rollback_many( $ids, $force );
 
 		return new WP_REST_Response( $summary, 200 );
+	}
+
+	/**
+	 * GET /approval - list approval rows.
+	 *
+	 * @param \WP_REST_Request $req Request.
+	 */
+	public static function list_approvals( WP_REST_Request $req ): WP_REST_Response {
+		$repo   = new ApprovalRepository();
+		$status = $req->get_param( 'status' );
+		if ( ! is_string( $status ) || '' === $status ) {
+			$status = 'pending';
+		}
+		$filters = array(
+			'status'   => $status,
+			'per_page' => (int) $req->get_param( 'per_page' ),
+			'offset'   => (int) $req->get_param( 'offset' ),
+		);
+		return new WP_REST_Response( $repo->list( $filters ), 200 );
+	}
+
+	/**
+	 * GET /retention - return retention policy + last-prune metadata.
+	 *
+	 * @param \WP_REST_Request $req Unused - included for REST route handler signature.
+	 */
+	public static function get_retention( WP_REST_Request $req ): WP_REST_Response { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+		$svc         = new RetentionService();
+		$last_pruned = get_option( 'abilityguard_last_pruned', null );
+		$rows_pruned = (int) get_option( 'abilityguard_last_pruned_count', 0 );
+		return new WP_REST_Response(
+			array(
+				'normal_days'      => $svc->retention_days_normal(),
+				'destructive_days' => $svc->retention_days_destructive(),
+				'last_pruned'      => $last_pruned,
+				'rows_pruned'      => $rows_pruned,
+			),
+			200
+		);
 	}
 
 	/**

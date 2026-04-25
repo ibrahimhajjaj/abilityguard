@@ -1,4 +1,4 @@
-/* AbilityGuard admin app - hybrid timeline + command palette + rollback. */
+/* AbilityGuard admin app - v0.4 feature parity. */
 
 import React from "react";
 import * as ReactDOM from "react-dom/client";
@@ -42,6 +42,7 @@ function adaptRow(r, nowMs) {
     status: statusFromRaw(r.status),
     ability: r.ability_name,
     caller: r.caller_type || "internal",
+    caller_id: r.caller_id || null,
     user,
     destructive: !!Number(r.destructive),
     duration: r.duration_ms !== null && r.duration_ms !== undefined ? Number(r.duration_ms) : null,
@@ -116,14 +117,12 @@ function statusGlyph2(s) {
 function allGroupsByIndex(groups, i) { return groups[i] || { key: "" }; }
 
 function groupByDay(rows) {
-  // Returns array of { key, label, sub, date, items }, sorted newest first.
   const byKey = new Map();
   rows.forEach((r) => {
     const k = dayKeyFor(r);
     if (!byKey.has(k)) byKey.set(k, { key: k, date: r.dayDate || null, items: [] });
     byKey.get(k).items.push(r);
   });
-  // Order: today, yesterday, then by date desc
   const groups = [...byKey.values()];
   const order = (g) => {
     if (g.key === "today") return Infinity;
@@ -141,7 +140,76 @@ function groupByDay(rows) {
   return groups;
 }
 
-/* ---- App store (vanilla state via hooks) ---- */
+/* ---- Encrypted / truncated value rendering ---- */
+function isEncryptedEnvelope(val) {
+  return val && typeof val === "object" && val._abilityguard_redacted === true;
+}
+function isTruncatedMarker(val) {
+  return val && typeof val === "object" && val._abilityguard_truncated === true;
+}
+
+function EncryptedBadge() {
+  return (
+    <span
+      title="Encrypted via AbilityGuard. Decryptable on rollback."
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 3,
+        background: "var(--neutral-bg)", border: "1px solid var(--border)",
+        borderRadius: 3, padding: "1px 6px", fontSize: 11, color: "var(--ink-2)",
+        fontFamily: "inherit", cursor: "default",
+      }}
+    >
+      🔒 <span>[encrypted]</span>
+    </span>
+  );
+}
+
+function TruncatedBadge({ originalBytes }) {
+  const kb = originalBytes ? ` (${Math.round(originalBytes / 1024)} KB original)` : "";
+  return (
+    <span
+      title={`Truncated${originalBytes ? ` - original was ${originalBytes} bytes` : ""}. Increase via abilityguard_max_*_bytes filters.`}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 3,
+        background: "var(--warn-bg)", border: "1px solid #f0d68a",
+        borderRadius: 3, padding: "1px 6px", fontSize: 11, color: "#6e4a00",
+        fontFamily: "inherit", cursor: "default",
+      }}
+    >
+      ⚠ <span>Truncated{kb}</span>
+    </span>
+  );
+}
+
+/* Walk a parsed JSON value tree, replace sentinels with React nodes. */
+function walkForSentinels(val) {
+  if (typeof val === "string" && val === "[redacted]") {
+    return { __sentinel: "redacted" };
+  }
+  if (isEncryptedEnvelope(val)) return { __sentinel: "encrypted" };
+  if (isTruncatedMarker(val)) return { __sentinel: "truncated", original_bytes: val.original_bytes };
+  if (Array.isArray(val)) return val.map(walkForSentinels);
+  if (val && typeof val === "object") {
+    const out = {};
+    for (const k of Object.keys(val)) out[k] = walkForSentinels(val[k]);
+    return out;
+  }
+  return val;
+}
+
+/* Render a walked value as React nodes for display in diff cells */
+function renderWalkedValue(val) {
+  if (val === null) return <span className="dim">null</span>;
+  if (val === undefined) return <span className="dim">-</span>;
+  if (val && val.__sentinel === "redacted") return <span title="Legacy redacted sentinel">🔒 [redacted]</span>;
+  if (val && val.__sentinel === "encrypted") return <EncryptedBadge />;
+  if (val && val.__sentinel === "truncated") return <TruncatedBadge originalBytes={val.original_bytes} />;
+  if (typeof val === "string") return <span className="mono" style={{ fontSize: 11 }}>{val}</span>;
+  if (typeof val === "number" || typeof val === "boolean") return <span className="mono" style={{ fontSize: 11 }}>{String(val)}</span>;
+  return <span className="mono" style={{ fontSize: 11 }}>{JSON.stringify(val)}</span>;
+}
+
+/* ---- App store ---- */
 function useStore() {
   const [rows, setRows] = React.useState(ALL_ROWS);
   const [view, setView] = React.useState({ name: "list", id: null });
@@ -152,16 +220,17 @@ function useStore() {
   const [range, setRange] = React.useState("all");
   const [destructiveOnly, setDestructiveOnly] = React.useState(false);
   const [selectedIdx, setSelectedIdx] = React.useState(0);
-  const [modal, setModal] = React.useState(null); // { rowId }
+  const [modal, setModal] = React.useState(null); // { rowId } | { bulk: true, ids: [] }
   const [toasts, setToasts] = React.useState([]);
   const [banner, setBanner] = React.useState(null);
+  const [selectedIds, setSelectedIds] = React.useState(new Set());
+  const [bulkErrorsModal, setBulkErrorsModal] = React.useState(null); // { skipped, errors }
 
   const filtered = React.useMemo(() => {
     return rows.filter((r) => {
       if (!statusChips[r.status]) return false;
       if (!callerChips[r.caller]) return false;
       if (destructiveOnly && !r.destructive) return false;
-      // tokens
       for (const t of tokens) {
         if (t.k === "status") {
           const map = { error: "err", ok: "ok", rolled: "rolled", pending: "pending" };
@@ -195,22 +264,31 @@ function useStore() {
   const dismissToast = (id) => setToasts((t) => t.filter((x) => x.id !== id));
 
   const openModal = (rowId) => setModal({ rowId });
+  const openBulkModal = (ids) => setModal({ bulk: true, ids });
   const closeModal = () => setModal(null);
 
-  const performRollback = (rowId) => {
+  const performRollback = (rowId, force = false) => {
     const row = rows.find((r) => r.id === rowId);
     closeModal();
     pushToast({ kind: "pending", title: `Rolling back #${rowId}…`, body: "Restoring snapshot…", duration: 30000 });
 
-    fetch(`${BOOT.rest.url}rollback/${rowId}`, {
+    const qs = force ? "?force=1" : "";
+    fetch(`${BOOT.rest.url}rollback/${rowId}${qs}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-WP-Nonce": BOOT.rest.nonce },
     })
-      .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
-      .then(({ ok, body }) => {
+      .then((r) => r.json().then((j) => ({ ok: r.ok, body: j, status: r.status })))
+      .then(({ ok, body, status }) => {
         setToasts((t) => t.filter((x) => x.kind !== "pending"));
         if (!ok) {
-          pushToast({ kind: "error", title: "Couldn't roll back", body: body?.message || "Unknown error", duration: 6000 });
+          // Return drift/partial error info so caller can decide to show modal again
+          if (body?.code === "abilityguard_rollback_drift" || body?.code === "abilityguard_rollback_partial") {
+            const driftedSurfaces = body?.data?.drifted_surfaces || [];
+            const skippedKeys = body?.data?.skipped_keys || [];
+            setModal({ rowId, driftError: { code: body.code, driftedSurfaces, skippedKeys } });
+          } else {
+            pushToast({ kind: "error", title: "Couldn't roll back", body: body?.message || "Unknown error", duration: 6000 });
+          }
           return;
         }
         setRows((rs) => rs.map((r) => (r.id === rowId ? { ...r, status: "rolled", rolledBy: "you, just now" } : r)));
@@ -228,11 +306,62 @@ function useStore() {
       });
   };
 
+  const performBulkRollback = (ids, force = false) => {
+    closeModal();
+    pushToast({ kind: "pending", title: `Rolling back ${ids.length} invocations…`, body: "Please wait…", duration: 60000 });
+
+    fetch(`${BOOT.rest.url}rollback/bulk`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-WP-Nonce": BOOT.rest.nonce },
+      body: JSON.stringify({ ids, force }),
+    })
+      .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
+      .then(({ ok, body }) => {
+        setToasts((t) => t.filter((x) => x.kind !== "pending"));
+        if (!ok) {
+          pushToast({ kind: "error", title: "Bulk rollback failed", body: body?.message || "Unknown error", duration: 6000 });
+          return;
+        }
+        const { rolled_back = [], skipped = {}, errors = {} } = body;
+        const rolledSet = new Set(rolled_back.map(Number));
+        setRows((rs) => rs.map((r) => rolledSet.has(r.id) ? { ...r, status: "rolled", rolledBy: "you, just now" } : r));
+        setSelectedIds(new Set());
+
+        const skippedCount = Object.keys(skipped).length;
+        const errorCount = Object.keys(errors).length;
+        const hasProblems = skippedCount > 0 || errorCount > 0;
+
+        pushToast({
+          kind: errorCount > 0 ? "error" : "success",
+          title: `${rolled_back.length} rolled back, ${skippedCount} skipped, ${errorCount} errored`,
+          body: hasProblems ? "View errors for details" : "All selected invocations rolled back.",
+          duration: hasProblems ? 8000 : 4500,
+          bulkResult: hasProblems ? { skipped, errors } : null,
+          onViewErrors: hasProblems ? (() => setBulkErrorsModal({ skipped, errors })) : null,
+        });
+      })
+      .catch((e) => {
+        setToasts((t) => t.filter((x) => x.kind !== "pending"));
+        pushToast({ kind: "error", title: "Bulk rollback failed", body: String(e), duration: 6000 });
+      });
+  };
+
   const undoRollback = (rowId) => {
     setRows((rs) => rs.map((r) => (r.id === rowId ? { ...r, status: "ok", rolledBy: undefined } : r)));
     setBanner(null);
     pushToast({ kind: "success", title: "Rollback undone", body: `#${rowId} restored to OK`, duration: 2500 });
   };
+
+  const toggleSelectId = (id) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const clearSelection = () => setSelectedIds(new Set());
 
   return {
     rows, setRows, view, setView,
@@ -240,11 +369,14 @@ function useStore() {
     statusChips, setStatusChips, callerChips, setCallerChips,
     range, setRange, destructiveOnly, setDestructiveOnly,
     selectedIdx, setSelectedIdx,
-    modal, openModal, closeModal,
+    modal, openModal, openBulkModal, closeModal,
     toasts, pushToast, dismissToast,
     banner, setBanner,
     filtered,
     performRollback, undoRollback,
+    performBulkRollback,
+    selectedIds, toggleSelectId, clearSelection,
+    bulkErrorsModal, setBulkErrorsModal,
   };
 }
 
@@ -259,7 +391,6 @@ function TokenSearch({ store }) {
     if (!text) return [];
     const colonIdx = text.indexOf(":");
     if (colonIdx === -1) {
-      // suggest keys
       return Object.keys(SUGGESTIONS_DICT)
         .filter((k) => k.startsWith(text.toLowerCase()))
         .slice(0, 6)
@@ -287,7 +418,6 @@ function TokenSearch({ store }) {
         inputRef.current?.focus();
       }
     };
-    // Capture phase so wp-admin's own keydown handlers can't pre-empt ours.
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, []);
@@ -452,15 +582,39 @@ function FilterBar({ store }) {
   );
 }
 
+/* ---- Bulk action bar ---- */
+function BulkBar({ store }) {
+  const count = store.selectedIds.size;
+  if (count === 0) return null;
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 10,
+      padding: "8px 12px",
+      background: "var(--surface-2)",
+      border: "1px solid var(--border)",
+      borderRadius: "var(--radius)",
+      marginBottom: 8,
+      fontSize: 13,
+    }}>
+      <span className="dim"><strong>{count}</strong> selected</span>
+      <button
+        className="btn btn-sm"
+        onClick={() => store.openBulkModal([...store.selectedIds])}
+      >Roll back selected</button>
+      <button className="btn-link" style={{ marginLeft: "auto" }} onClick={store.clearSelection}>Clear selection</button>
+    </div>
+  );
+}
+
 /* ---- Stream ---- */
 function DayPagination({ page, totalPages, total, onChange }) {
   const start = (page - 1) * 15 + 1;
   const end = Math.min(page * 15, total);
   const pages = [];
-  const window = 5;
+  const win = 5;
   let lo = Math.max(1, page - 2);
-  let hi = Math.min(totalPages, lo + window - 1);
-  lo = Math.max(1, hi - window + 1);
+  let hi = Math.min(totalPages, lo + win - 1);
+  lo = Math.max(1, hi - win + 1);
   for (let i = lo; i <= hi; i++) pages.push(i);
   return (
     <div className="hy-day-pager">
@@ -492,9 +646,10 @@ function DayPagination({ page, totalPages, total, onChange }) {
   );
 }
 
-function StreamRow({ row, isSelected, onOpen, onRollback, onMouseEnter }) {
+function StreamRow({ row, isSelected, onOpen, onRollback, onMouseEnter, checked, onCheck }) {
   const g = statusGlyph2(row.status);
   const canRb = row.status === "ok" && row.destructive;
+  const callerLabel = row.caller_id ? `${row.caller} · ${row.caller_id}` : row.caller;
   return (
     <div
       className={`tl-event ${isSelected ? "tl-event-selected" : ""}`}
@@ -503,6 +658,16 @@ function StreamRow({ row, isSelected, onOpen, onRollback, onMouseEnter }) {
       tabIndex={0}
       role="button"
     >
+      <div style={{ display: "flex", alignItems: "flex-start", paddingTop: 2, marginRight: 4 }}>
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => { e.stopPropagation(); onCheck(); }}
+          onClick={(e) => e.stopPropagation()}
+          style={{ marginTop: 2 }}
+          aria-label={`Select invocation #${row.id}`}
+        />
+      </div>
       <div className="tl-marker" style={{ background: g.bg }}>{g.ch}</div>
       <div className="tl-card">
         <div className="tl-head">
@@ -519,7 +684,7 @@ function StreamRow({ row, isSelected, onOpen, onRollback, onMouseEnter }) {
             <span className="user-cell"><span className="avatar a-system">sys</span><span className="dim">system</span></span>
           )}
           <span className="tl-sep">·</span>
-          <span className="tag">{row.caller}</span>
+          <span className="tag">{callerLabel}</span>
           {row.duration !== null && (
             <>
               <span className="tl-sep">·</span>
@@ -558,19 +723,26 @@ function ListScreen({ store }) {
   const allGroups = React.useMemo(() => groupByDay(store.filtered), [store.filtered]);
   const [daysShown, setDaysShown] = React.useState(DAYS_PER_PAGE);
   const [collapsedDays, setCollapsedDays] = React.useState({});
-  const [dayPages, setDayPages] = React.useState({}); // { dayKey: pageNumber }
-  const [jumpDate, setJumpDate] = React.useState(""); // YYYY-MM-DD
+  const [dayPages, setDayPages] = React.useState({});
+  const [jumpDate, setJumpDate] = React.useState("");
+  const [subView, setSubView] = React.useState("activity"); // "activity" | "approvals"
 
   const filterKey = `${store.filtered.length}-${store.tokens.length}-${store.query}`;
   React.useEffect(() => { setDaysShown(DAYS_PER_PAGE); setCollapsedDays({}); setDayPages({}); }, [filterKey]);
 
-  // Build a lookup: YYYY-MM-DD -> group index
   const dateToIndex = React.useMemo(() => {
     const m = new Map();
     allGroups.forEach((g, i) => {
-      if (g.key === "today") m.set("2026-04-25", i);
-      else if (g.key === "yesterday") m.set("2026-04-24", i);
-      else if (g.date) m.set(`${g.date.getFullYear()}-${String(g.date.getMonth()+1).padStart(2,"0")}-${String(g.date.getDate()).padStart(2,"0")}`, i);
+      if (g.key === "today") {
+        const d = new Date();
+        m.set(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`, i);
+      } else if (g.key === "yesterday") {
+        const d = new Date(TODAY_REF);
+        d.setDate(d.getDate() - 1);
+        m.set(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`, i);
+      } else if (g.date) {
+        m.set(`${g.date.getFullYear()}-${String(g.date.getMonth()+1).padStart(2,"0")}-${String(g.date.getDate()).padStart(2,"0")}`, i);
+      }
     });
     return m;
   }, [allGroups]);
@@ -592,7 +764,6 @@ function ListScreen({ store }) {
 
   const visibleGroups = allGroups.slice(0, daysShown);
 
-  // Flat ids for keyboard navigation
   const flatIds = React.useMemo(() => {
     const ids = [];
     visibleGroups.forEach((g) => {
@@ -633,7 +804,7 @@ function ListScreen({ store }) {
     const cur = jumpDate || maxDate;
     const i = datesAvailable.indexOf(cur);
     let next = i;
-    if (delta > 0) next = Math.min(i + 1, datesAvailable.length - 1); // newer = later string
+    if (delta > 0) next = Math.min(i + 1, datesAvailable.length - 1);
     else next = Math.max(i - 1, 0);
     const iso = datesAvailable[next];
     if (iso) { setJumpDate(iso); jumpToISO(iso); }
@@ -671,133 +842,152 @@ function ListScreen({ store }) {
           </div>
         )}
 
-        <TokenSearch store={store} />
-        <FilterBar store={store} />
+        {/* Sub-view tabs */}
+        <div style={{ display: "flex", gap: 0, borderBottom: "1px solid var(--border)", marginBottom: 12 }}>
+          {[["activity", "Activity log"], ["approvals", "Pending approvals"]].map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setSubView(key)}
+              style={{
+                background: "none", border: "none", borderBottom: subView === key ? "2px solid var(--accent)" : "2px solid transparent",
+                padding: "8px 16px", cursor: "pointer", fontSize: 13, fontWeight: subView === key ? 600 : 400,
+                color: subView === key ? "var(--accent)" : "var(--ink-2)", marginBottom: -1,
+              }}
+            >{label}</button>
+          ))}
+          <RetentionWidget />
+        </div>
 
-        <main className="hy-stream-wrap">
-          <div className="hy-stream-head dim">
-            <div className="hy-stream-head-left">
-              <span>{flatIds.length} rows visible · {store.filtered.length.toLocaleString()} match filters</span>
-            </div>
-            <div className="hy-jumpbar">
-              <button
-                className="hy-jump-step"
-                onClick={() => stepDate(-1)}
-                aria-label="Older day"
-                title="Older day"
-              >‹</button>
-              <input
-                type="date"
-                className="hy-jump-input"
-                value={jumpDate}
-                min={minDate}
-                max={maxDate}
-                onChange={(e) => { setJumpDate(e.target.value); if (e.target.value) jumpToISO(e.target.value); }}
-                aria-label="Jump to date"
-              />
-              <button
-                className="hy-jump-step"
-                onClick={() => stepDate(1)}
-                aria-label="Newer day"
-                title="Newer day"
-              >›</button>
-              <button
-                className="btn-link hy-jump-today"
-                onClick={() => { setJumpDate("2026-04-25"); jumpToISO("2026-04-25"); }}
-              >Today</button>
-            </div>
-            <div className="cp-sort">
-              <button className="cp-sort-btn is-active">newest</button>
-              <button className="cp-sort-btn">slowest</button>
-              <button className="cp-sort-btn">most disruptive</button>
-            </div>
-          </div>
+        {subView === "approvals" ? (
+          <ApprovalsView store={store} />
+        ) : (
+          <>
+            <TokenSearch store={store} />
+            <FilterBar store={store} />
+            <BulkBar store={store} />
 
-          {allGroups.length === 0 ? (
-            <div className="hy-no-results">
-              <h3>No invocations match these filters.</h3>
-              <p className="dim">Try removing a token or widening the time range.</p>
-              <button className="btn" onClick={() => {
-                store.setStatusChips({ ok: true, err: true, rolled: true, pending: true });
-                store.setCallerChips({ rest: true, cli: true, internal: true });
-                store.setTokens([]); store.setQuery(""); store.setDestructiveOnly(false);
-              }}>Reset filters</button>
-            </div>
-          ) : (
-            <div className="dt-stream">
-              {visibleGroups.map((g) => {
-                const isUserCollapsed = collapsedDays[g.key];
-                const totalPages = Math.ceil(g.items.length / ROWS_PER_DAY_PAGE);
-                const page = Math.min(dayPages[g.key] || 1, totalPages);
-                const start = (page - 1) * ROWS_PER_DAY_PAGE;
-                const itemsToShow = isUserCollapsed ? [] : g.items.slice(start, start + ROWS_PER_DAY_PAGE);
-
-                return (
-                  <section key={g.key} id={`day-${g.key}`} className="tl-group">
-                    <header className="tl-group-head hy-day-head">
-                      <div className="tl-group-dot" />
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div className="tl-group-label">{g.label}</div>
-                        <div className="tl-group-sub dim">
-                          {g.sub} · {g.items.length} invocations
-                          {g.errors > 0 && <span className="hy-day-stat-err"> · {g.errors} errors</span>}
-                          {g.rolled > 0 && <span className="dim"> · {g.rolled} rolled back</span>}
-                        </div>
-                      </div>
-                      <button
-                        className="hy-day-toggle"
-                        onClick={() => setCollapsedDays((c) => ({ ...c, [g.key]: !c[g.key] }))}
-                      >
-                        {isUserCollapsed ? "Expand" : "Collapse"}
-                      </button>
-                    </header>
-                    {!isUserCollapsed && (
-                      <>
-                        <div className="tl-events">
-                          {itemsToShow.map((row) => {
-                            const flatPos = flatIds.indexOf(row.id);
-                            return (
-                              <StreamRow
-                                key={row.id}
-                                row={row}
-                                isSelected={flatPos === store.selectedIdx}
-                                onOpen={() => store.setView({ name: "detail", id: row.id })}
-                                onRollback={() => store.openModal(row.id)}
-                                onMouseEnter={() => store.setSelectedIdx(flatPos)}
-                              />
-                            );
-                          })}
-                        </div>
-                        {totalPages > 1 && (
-                          <DayPagination
-                            page={page}
-                            totalPages={totalPages}
-                            total={g.items.length}
-                            onChange={(p) => setDayPages((dp) => ({ ...dp, [g.key]: p }))}
-                          />
-                        )}
-                      </>
-                    )}
-                  </section>
-                );
-              })}
-
-              {daysShown < allGroups.length && (
-                <div className="hy-load-more-wrap">
+            <main className="hy-stream-wrap">
+              <div className="hy-stream-head dim">
+                <div className="hy-stream-head-left">
+                  <span>{flatIds.length} rows visible · {store.filtered.length.toLocaleString()} match filters</span>
+                </div>
+                <div className="hy-jumpbar">
+                  <button className="hy-jump-step" onClick={() => stepDate(-1)} aria-label="Older day" title="Older day">‹</button>
+                  <input
+                    type="date"
+                    className="hy-jump-input"
+                    value={jumpDate}
+                    min={minDate}
+                    max={maxDate}
+                    onChange={(e) => { setJumpDate(e.target.value); if (e.target.value) jumpToISO(e.target.value); }}
+                    aria-label="Jump to date"
+                  />
+                  <button className="hy-jump-step" onClick={() => stepDate(1)} aria-label="Newer day" title="Newer day">›</button>
                   <button
-                    className="btn hy-load-more-btn"
-                    onClick={() => setDaysShown((d) => Math.min(d + DAYS_PER_PAGE, allGroups.length))}
-                  >
-                    Load {Math.min(DAYS_PER_PAGE, allGroups.length - daysShown)} more days ↓
-                  </button>
-                  <div className="dim hy-load-more-hint" style={{ fontSize: 11.5 }}>
-                    or use the date picker above to jump to a specific day
-                  </div>
+                    className="btn-link hy-jump-today"
+                    onClick={() => {
+                      const today = new Date();
+                      const iso = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+                      setJumpDate(iso); jumpToISO(iso);
+                    }}
+                  >Today</button>
+                </div>
+                <div className="cp-sort">
+                  <button className="cp-sort-btn is-active">newest</button>
+                  <button className="cp-sort-btn">slowest</button>
+                  <button className="cp-sort-btn">most disruptive</button>
+                </div>
+              </div>
+
+              {allGroups.length === 0 ? (
+                <div className="hy-no-results">
+                  <h3>No invocations match these filters.</h3>
+                  <p className="dim">Try removing a token or widening the time range.</p>
+                  <button className="btn" onClick={() => {
+                    store.setStatusChips({ ok: true, err: true, rolled: true, pending: true });
+                    store.setCallerChips({ rest: true, cli: true, internal: true });
+                    store.setTokens([]); store.setQuery(""); store.setDestructiveOnly(false);
+                  }}>Reset filters</button>
+                </div>
+              ) : (
+                <div className="dt-stream">
+                  {visibleGroups.map((g) => {
+                    const isUserCollapsed = collapsedDays[g.key];
+                    const totalPages = Math.ceil(g.items.length / ROWS_PER_DAY_PAGE);
+                    const page = Math.min(dayPages[g.key] || 1, totalPages);
+                    const start = (page - 1) * ROWS_PER_DAY_PAGE;
+                    const itemsToShow = isUserCollapsed ? [] : g.items.slice(start, start + ROWS_PER_DAY_PAGE);
+
+                    return (
+                      <section key={g.key} id={`day-${g.key}`} className="tl-group">
+                        <header className="tl-group-head hy-day-head">
+                          <div className="tl-group-dot" />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div className="tl-group-label">{g.label}</div>
+                            <div className="tl-group-sub dim">
+                              {g.sub} · {g.items.length} invocations
+                              {g.errors > 0 && <span className="hy-day-stat-err"> · {g.errors} errors</span>}
+                              {g.rolled > 0 && <span className="dim"> · {g.rolled} rolled back</span>}
+                            </div>
+                          </div>
+                          <button
+                            className="hy-day-toggle"
+                            onClick={() => setCollapsedDays((c) => ({ ...c, [g.key]: !c[g.key] }))}
+                          >
+                            {isUserCollapsed ? "Expand" : "Collapse"}
+                          </button>
+                        </header>
+                        {!isUserCollapsed && (
+                          <>
+                            <div className="tl-events">
+                              {itemsToShow.map((row) => {
+                                const flatPos = flatIds.indexOf(row.id);
+                                return (
+                                  <StreamRow
+                                    key={row.id}
+                                    row={row}
+                                    isSelected={flatPos === store.selectedIdx}
+                                    onOpen={() => store.setView({ name: "detail", id: row.id })}
+                                    onRollback={() => store.openModal(row.id)}
+                                    onMouseEnter={() => store.setSelectedIdx(flatPos)}
+                                    checked={store.selectedIds.has(row.id)}
+                                    onCheck={() => store.toggleSelectId(row.id)}
+                                  />
+                                );
+                              })}
+                            </div>
+                            {totalPages > 1 && (
+                              <DayPagination
+                                page={page}
+                                totalPages={totalPages}
+                                total={g.items.length}
+                                onChange={(p) => setDayPages((dp) => ({ ...dp, [g.key]: p }))}
+                              />
+                            )}
+                          </>
+                        )}
+                      </section>
+                    );
+                  })}
+
+                  {daysShown < allGroups.length && (
+                    <div className="hy-load-more-wrap">
+                      <button
+                        className="btn hy-load-more-btn"
+                        onClick={() => setDaysShown((d) => Math.min(d + DAYS_PER_PAGE, allGroups.length))}
+                      >
+                        Load {Math.min(DAYS_PER_PAGE, allGroups.length - daysShown)} more days ↓
+                      </button>
+                      <div className="dim hy-load-more-hint" style={{ fontSize: 11.5 }}>
+                        or use the date picker above to jump to a specific day
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
-        </main>
+            </main>
+          </>
+        )}
 
         <footer className="hy-foot dim">
           <span><kbd className="cp-kbd">↑↓</kbd> navigate</span>
@@ -810,6 +1000,149 @@ function ListScreen({ store }) {
   );
 }
 
+/* ---- Retention widget ---- */
+function RetentionWidget() {
+  const [info, setInfo] = React.useState(null);
+  React.useEffect(() => {
+    fetch(`${BOOT.rest.url}retention`, { headers: { "X-WP-Nonce": BOOT.rest.nonce } })
+      .then((r) => r.json())
+      .then((body) => { if (body && body.normal_days !== undefined) setInfo(body); })
+      .catch(() => {});
+  }, []);
+  if (!info) return null;
+  const lastPrunedText = info.last_pruned
+    ? relativeWhen(info.last_pruned.replace(" ", "T") + "Z", Date.now())
+    : "never";
+  return (
+    <div style={{
+      marginLeft: "auto", alignSelf: "center", paddingRight: 4,
+      fontSize: 11.5, color: "var(--ink-3)", display: "flex", gap: 8, alignItems: "center",
+    }}>
+      <span>Retention: <strong>{info.normal_days}d</strong> normal / <strong>{info.destructive_days}d</strong> destructive</span>
+      <span>·</span>
+      <span>Last pruned {lastPrunedText}{info.rows_pruned ? `, ${info.rows_pruned} rows` : ""}</span>
+    </div>
+  );
+}
+
+/* ---- Approvals sub-view ---- */
+function ApprovalsView({ store }) {
+  const [approvals, setApprovals] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+  const [acting, setActing] = React.useState({}); // id -> true
+
+  const load = React.useCallback(() => {
+    setLoading(true);
+    setError(null);
+    fetch(`${BOOT.rest.url}approval?status=pending&per_page=100`, {
+      headers: { "X-WP-Nonce": BOOT.rest.nonce },
+    })
+      .then((r) => {
+        if (r.status === 403) throw new Error("__403");
+        return r.json().then((j) => ({ ok: r.ok, body: j }));
+      })
+      .then(({ ok, body }) => {
+        setLoading(false);
+        if (!ok) { setError(body?.message || "Failed to load approvals"); return; }
+        setApprovals(Array.isArray(body) ? body : []);
+      })
+      .catch((e) => {
+        setLoading(false);
+        if (e.message === "__403") {
+          setError("__403");
+        } else {
+          setError(String(e));
+        }
+      });
+  }, []);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const act = (id, action) => {
+    setActing((a) => ({ ...a, [id]: true }));
+    fetch(`${BOOT.rest.url}approval/${id}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-WP-Nonce": BOOT.rest.nonce },
+    })
+      .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
+      .then(({ ok, body }) => {
+        setActing((a) => { const x = { ...a }; delete x[id]; return x; });
+        if (!ok) {
+          store.pushToast({ kind: "error", title: `Could not ${action}`, body: body?.message || "Unknown error", duration: 5000 });
+          return;
+        }
+        store.pushToast({ kind: "success", title: `Approval ${action}d`, body: `#${id}`, duration: 3000 });
+        setApprovals((prev) => prev ? prev.filter((a) => a.id !== id) : prev);
+      })
+      .catch((e) => {
+        setActing((a) => { const x = { ...a }; delete x[id]; return x; });
+        store.pushToast({ kind: "error", title: `Could not ${action}`, body: String(e), duration: 5000 });
+      });
+  };
+
+  if (loading) return <div className="dim" style={{ padding: 24, fontSize: 13 }}>Loading approvals…</div>;
+
+  if (error === "__403") {
+    return (
+      <div style={{
+        padding: "12px 16px", background: "var(--warn-bg)", border: "1px solid #f0d68a",
+        borderRadius: "var(--radius)", fontSize: 13, color: "#6e4a00", margin: "12px 0",
+      }}>
+        <strong>Permission required</strong> - You don't have permission to view or approve requests.
+        The <code>manage_abilityguard_approvals</code> capability is required.
+      </div>
+    );
+  }
+
+  if (error) return <div style={{ padding: 24, color: "var(--err-fg)", fontSize: 13 }}>{error}</div>;
+
+  if (!approvals || approvals.length === 0) {
+    return (
+      <div className="hy-no-results" style={{ textAlign: "center", padding: 48 }}>
+        <h3>No pending approvals</h3>
+        <p className="dim">All caught up. Pending ability requests will appear here.</p>
+        <button className="btn btn-sm" onClick={load}>Refresh</button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <span className="dim" style={{ fontSize: 12 }}>{approvals.length} pending</span>
+        <button className="btn-link" style={{ fontSize: 12 }} onClick={load}>Refresh</button>
+      </div>
+      {approvals.map((appr) => (
+        <div key={appr.id} style={{
+          background: "var(--surface)", border: "1px solid var(--border)",
+          borderRadius: "var(--radius)", padding: "12px 16px", marginBottom: 8,
+          display: "flex", alignItems: "center", gap: 12,
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600, fontSize: 13 }} className="mono">{appr.ability_name}</div>
+            <div className="dim" style={{ fontSize: 11.5, marginTop: 2 }}>
+              Approval #{appr.id}
+              {appr.log_id ? <> · Invocation #{appr.log_id}</> : ""}
+              {appr.created_at ? <> · {relativeWhen(appr.created_at.replace(" ", "T") + "Z", Date.now())}</> : ""}
+            </div>
+          </div>
+          <button
+            className="btn btn-sm"
+            disabled={!!acting[appr.id]}
+            onClick={() => act(appr.id, "approve")}
+          >{acting[appr.id] ? "…" : "Approve"}</button>
+          <button
+            className="btn btn-sm btn-danger"
+            disabled={!!acting[appr.id]}
+            onClick={() => act(appr.id, "reject")}
+          >{acting[appr.id] ? "…" : "Reject"}</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ---- JSON syntax highlighter ---- */
 function JsonBlock({ src }) {
   const html = React.useMemo(() => {
@@ -817,19 +1150,93 @@ function JsonBlock({ src }) {
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
-    // strings (key or value)
     s = s.replace(/("(\\.|[^"\\])*")(\s*:)?/g, (m, str, _ch, colon) => {
       if (colon) return `<span class="jk">${str}</span>${colon}`;
       return `<span class="js">${str}</span>`;
     });
-    // numbers
     s = s.replace(/\b(-?\d+\.?\d*)\b/g, '<span class="jn">$1</span>');
-    // booleans / null
     s = s.replace(/\b(true|false)\b/g, '<span class="jb">$1</span>');
     s = s.replace(/\bnull\b/g, '<span class="jnl">null</span>');
     return s;
   }, [src]);
   return <pre className="hy-codeblock mono" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+/* ---- SmartJsonBlock: replaces cipher/truncated nodes with badges ---- */
+function SmartJsonBlock({ raw }) {
+  const parsed = React.useMemo(() => {
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  }, [raw]);
+
+  if (!parsed) {
+    return <JsonBlock src={raw || ""} />;
+  }
+
+  const walked = walkForSentinels(parsed);
+  const hasSentinels = JSON.stringify(walked).includes("__sentinel");
+
+  if (!hasSentinels) {
+    return <JsonBlock src={JSON.stringify(parsed, null, 2)} />;
+  }
+
+  // Render as a structured view showing sentinels inline
+  return <WalkedView val={walked} depth={0} />;
+}
+
+function WalkedView({ val, depth }) {
+  const indent = "  ".repeat(depth);
+  if (val && val.__sentinel === "redacted") {
+    return <span title="Legacy redacted sentinel">🔒 <span className="dim">[redacted]</span></span>;
+  }
+  if (val && val.__sentinel === "encrypted") {
+    return <EncryptedBadge />;
+  }
+  if (val && val.__sentinel === "truncated") {
+    return <TruncatedBadge originalBytes={val.original_bytes} />;
+  }
+  if (val === null) return <span className="jnl">null</span>;
+  if (typeof val === "boolean") return <span className="jb">{String(val)}</span>;
+  if (typeof val === "number") return <span className="jn">{val}</span>;
+  if (typeof val === "string") return <span className="js">"{val}"</span>;
+  if (Array.isArray(val)) {
+    if (val.length === 0) return <span>{"[]"}</span>;
+    return (
+      <span>
+        {"[\n"}
+        {val.map((v, i) => (
+          <span key={i}>
+            {indent + "  "}
+            <WalkedView val={v} depth={depth + 1} />
+            {i < val.length - 1 ? "," : ""}
+            {"\n"}
+          </span>
+        ))}
+        {indent + "]"}
+      </span>
+    );
+  }
+  if (val && typeof val === "object") {
+    const keys = Object.keys(val);
+    if (keys.length === 0) return <span>{"{}"}</span>;
+    return (
+      <span>
+        {"{\n"}
+        {keys.map((k, i) => (
+          <span key={k}>
+            {indent + "  "}
+            <span className="jk">"{k}"</span>
+            {": "}
+            <WalkedView val={val[k]} depth={depth + 1} />
+            {i < keys.length - 1 ? "," : ""}
+            {"\n"}
+          </span>
+        ))}
+        {indent + "}"}
+      </span>
+    );
+  }
+  return <span>{String(val)}</span>;
 }
 
 /* ---- Real-data hooks + helpers ---- */
@@ -878,6 +1285,156 @@ function summarizeSnapshot(snapshot) {
   return { surfaces: list.length, keys, list };
 }
 
+/* ---- Client-side diff computation (mirrors DiffService.php) ---- */
+function computeDiffRows(snapshot) {
+  if (!snapshot) return null;
+  const pre = snapshot.surfaces && typeof snapshot.surfaces === "object" ? snapshot.surfaces : {};
+  const postState = snapshot.post_state && typeof snapshot.post_state === "object" ? snapshot.post_state : null;
+
+  const rows = [];
+  for (const surface of Object.keys(pre)) {
+    const preSurface = pre[surface];
+    if (!preSurface || typeof preSurface !== "object") continue;
+    const postSurface = postState && postState[surface] && typeof postState[surface] === "object"
+      ? postState[surface] : null;
+
+    if (surface === "post_meta") {
+      for (const postId of Object.keys(preSurface)) {
+        const meta = preSurface[postId];
+        if (!meta || typeof meta !== "object") continue;
+        const label = `post_meta · post #${postId}`;
+        const postMeta = postSurface && postSurface[postId] && typeof postSurface[postId] === "object"
+          ? postSurface[postId] : null;
+        for (const metaKey of Object.keys(meta)) {
+          const before = meta[metaKey];
+          const after = postMeta !== null ? (postMeta[metaKey] !== undefined ? postMeta[metaKey] : null) : null;
+          rows.push({
+            surface: label,
+            key: metaKey,
+            before: walkForSentinels(before),
+            after: walkForSentinels(after),
+            changed: postMeta !== null && JSON.stringify(before) !== JSON.stringify(after),
+          });
+        }
+      }
+    } else {
+      for (const key of Object.keys(preSurface)) {
+        const before = preSurface[key];
+        const after = postSurface !== null ? (postSurface[key] !== undefined ? postSurface[key] : null) : null;
+        rows.push({
+          surface,
+          key,
+          before: walkForSentinels(before),
+          after: walkForSentinels(after),
+          changed: postSurface !== null && JSON.stringify(before) !== JSON.stringify(after),
+        });
+      }
+    }
+  }
+  return rows;
+}
+
+/* ---- Diff view ---- */
+function DiffView({ snapshot }) {
+  if (!snapshot) {
+    return <p className="dim" style={{ padding: 16, fontSize: 12 }}>No snapshot was captured for this invocation.</p>;
+  }
+
+  const hasPostState = !!snapshot.post_state;
+  const rows = computeDiffRows(snapshot);
+
+  if (!rows || rows.length === 0) {
+    return <p className="dim" style={{ padding: 16, fontSize: 12 }}>No diff data available for this snapshot.</p>;
+  }
+
+  if (!hasPostState) {
+    return (
+      <div>
+        <div style={{
+          padding: "10px 14px", background: "var(--warn-bg)", border: "1px solid #f0d68a",
+          borderRadius: "var(--radius)", fontSize: 12.5, color: "#6e4a00", margin: "12px 16px",
+        }}>
+          No diff available - post-state was not captured for this invocation.
+        </div>
+        <p className="dim" style={{ padding: "0 16px", fontSize: 12 }}>Showing pre-state only.</p>
+        <DiffTable rows={rows} showPostState={false} />
+      </div>
+    );
+  }
+
+  // Group by surface
+  const bySurface = {};
+  for (const r of rows) {
+    if (!bySurface[r.surface]) bySurface[r.surface] = [];
+    bySurface[r.surface].push(r);
+  }
+
+  return (
+    <div>
+      {Object.entries(bySurface).map(([surface, surfaceRows]) => {
+        const changedCount = surfaceRows.filter((r) => r.changed).length;
+        return (
+          <div key={surface} className="diff-surface">
+            <div className="diff-surface-head">
+              <span className="label">{surface}</span>
+              <span className="changes">{changedCount > 0 ? `${changedCount} changed` : "no changes"}</span>
+            </div>
+            <div className="diff-cols">
+              <div className="diff-col">
+                <div className="diff-col-head">Before</div>
+                <div className="diff-rows">
+                  {surfaceRows.map((r, i) => (
+                    <div key={i} className={`diff-row ${r.changed ? "removed" : "unchanged"}`}>
+                      <span className="dk">{r.key}</span>
+                      <span className="dv">{renderWalkedValue(r.before)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="diff-col">
+                <div className="diff-col-head">After</div>
+                <div className="diff-rows">
+                  {surfaceRows.map((r, i) => (
+                    <div key={i} className={`diff-row ${r.changed ? "added" : "unchanged"}`}>
+                      <span className="dk">{r.key}</span>
+                      <span className="dv">{renderWalkedValue(r.after)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DiffTable({ rows, showPostState }) {
+  const bySurface = {};
+  for (const r of rows) {
+    if (!bySurface[r.surface]) bySurface[r.surface] = [];
+    bySurface[r.surface].push(r);
+  }
+  return (
+    <div>
+      {Object.entries(bySurface).map(([surface, surfaceRows]) => (
+        <div key={surface} className="diff-surface">
+          <div className="diff-surface-head"><span className="label">{surface}</span></div>
+          <div className="diff-rows">
+            {surfaceRows.map((r, i) => (
+              <div key={i} className="diff-row unchanged">
+                <span className="dk">{r.key}</span>
+                <span className="dv">{renderWalkedValue(r.before)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* ---- Snapshot drawer ---- */
 function SnapshotDrawer({ row, snapshot, onClose }) {
   const summary = summarizeSnapshot(snapshot);
@@ -923,7 +1480,7 @@ function SnapshotDrawer({ row, snapshot, onClose }) {
                   <h3>Captured pre-state</h3>
                   <span className="dim" style={{ fontSize: 11 }}>state at the time of invocation</span>
                 </header>
-                <JsonBlock src={preState} />
+                <SmartJsonBlock raw={preState} />
               </section>
 
               <section className="hy-card">
@@ -952,7 +1509,7 @@ function SnapshotDrawer({ row, snapshot, onClose }) {
 function DetailScreen({ store }) {
   const row = store.rows.find((r) => r.id === store.view.id) || store.rows[0];
   const detail = useDetail(row?.id);
-  const [tab, setTab] = React.useState("snapshot");
+  const [tab, setTab] = React.useState("diff");
   const [snapshotOpen, setSnapshotOpen] = React.useState(false);
   const canRb = row.status === "ok" && row.destructive;
 
@@ -966,7 +1523,7 @@ function DetailScreen({ store }) {
       } else if ((e.key === "r" || e.key === "R") && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         if (canRb) store.openModal(row.id);
-      } else if (e.key === "1") setTab("snapshot");
+      } else if (e.key === "1") setTab("diff");
       else if (e.key === "2") setTab("input");
       else if (e.key === "3") setTab("result");
       else if (e.key === "4") setTab("activity");
@@ -980,6 +1537,7 @@ function DetailScreen({ store }) {
   const summary  = summarizeSnapshot(snapshot);
   const preHash  = log.pre_hash || row.pre_hash || "";
   const postHash = log.post_hash || row.post_hash || "";
+  const callerLabel = row.caller_id ? `${row.caller} · ${row.caller_id}` : row.caller;
 
   return (
     <div className="ag-root dir-hybrid">
@@ -1004,7 +1562,7 @@ function DetailScreen({ store }) {
             <p className="hy-sub">
               Invoked <strong>{row.when}</strong>
               {row.user && <> by <strong>{row.user.name}</strong></>}
-              <> via <span className="tag">{row.caller}</span></>
+              <> via <span className="tag">{callerLabel}</span></>
               {row.duration !== null && <span className="dim"> · {row.duration} ms</span>}
             </p>
           </div>
@@ -1059,9 +1617,9 @@ function DetailScreen({ store }) {
 
           <section className="hy-card hy-span-2">
             <header className="hy-card-head">
-              <h3>{tab === "snapshot" ? "Snapshot" : tab === "input" ? "Input" : tab === "result" ? "Result" : "Activity"}</h3>
+              <h3>{tab === "diff" ? "Diff" : tab === "input" ? "Input" : tab === "result" ? "Result" : "Activity"}</h3>
               <div className="hy-card-tabs">
-                <button className={tab === "snapshot" ? "is-active" : ""} onClick={() => setTab("snapshot")}>Snapshot</button>
+                <button className={tab === "diff" ? "is-active" : ""} onClick={() => setTab("diff")}>Diff</button>
                 <button className={tab === "input" ? "is-active" : ""} onClick={() => setTab("input")}>Input</button>
                 <button className={tab === "result" ? "is-active" : ""} onClick={() => setTab("result")}>Result</button>
                 <button className={tab === "activity" ? "is-active" : ""} onClick={() => setTab("activity")}>Activity</button>
@@ -1071,23 +1629,25 @@ function DetailScreen({ store }) {
             {detail.loading && <p className="dim" style={{ padding: 16, fontSize: 12 }}>Loading…</p>}
             {detail.error && <p className="dim" style={{ padding: 16, fontSize: 12, color: "var(--err-fg)" }}>{detail.error}</p>}
 
-            {!detail.loading && !detail.error && tab === "snapshot" && (
-              snapshot
-                ? <JsonBlock src={JSON.stringify(snapshot.surfaces, null, 2)} />
-                : <p className="dim" style={{ padding: 16, fontSize: 12 }}>No snapshot was captured for this invocation.</p>
+            {!detail.loading && !detail.error && tab === "diff" && (
+              <DiffView snapshot={snapshot} />
             )}
             {!detail.loading && !detail.error && tab === "input" && (
-              log.args_json ? <JsonBlock src={prettyJson(log.args_json)} /> : <p className="dim" style={{ padding: 16, fontSize: 12 }}>No input recorded.</p>
+              log.args_json
+                ? <SmartJsonBlock raw={log.args_json} />
+                : <p className="dim" style={{ padding: 16, fontSize: 12 }}>No input recorded.</p>
             )}
             {!detail.loading && !detail.error && tab === "result" && (
-              log.result_json ? <JsonBlock src={prettyJson(log.result_json)} /> : <p className="dim" style={{ padding: 16, fontSize: 12 }}>No result recorded.</p>
+              log.result_json
+                ? <SmartJsonBlock raw={log.result_json} />
+                : <p className="dim" style={{ padding: 16, fontSize: 12 }}>No result recorded.</p>
             )}
             {!detail.loading && !detail.error && tab === "activity" && (
               <ul className="hy-timeline">
                 <li>
                   <span className="hy-tl-dot" style={{ background: "var(--accent)" }} />
                   <div>
-                    <strong>Invoked</strong> by {row.user?.name || "system"} via {row.caller.toUpperCase()}
+                    <strong>Invoked</strong> by {row.user?.name || "system"} via {callerLabel.toUpperCase()}
                   </div>
                   <span className="dim mono hy-tl-when">{row.abs}</span>
                 </li>
@@ -1132,20 +1692,64 @@ function DetailScreen({ store }) {
   );
 }
 
-/* ---- Modal ---- */
+/* ---- Drift callout ---- */
+function DriftCallout({ driftError }) {
+  if (!driftError) return null;
+  const isDrift = driftError.code === "abilityguard_rollback_drift";
+  const surfaces = driftError.driftedSurfaces || [];
+  const skippedKeys = driftError.skippedKeys || [];
+
+  return (
+    <div style={{
+      background: "var(--warn-bg)", border: "1px solid #f0d68a",
+      borderRadius: "var(--radius)", padding: "10px 14px", marginTop: 8, marginBottom: 4,
+      fontSize: 12.5, color: "#6e4a00",
+    }}>
+      <strong>{isDrift ? "Live state has drifted on:" : "Partial rollback - some keys were skipped:"}</strong>
+      {isDrift && surfaces.length > 0 && (
+        <ul style={{ margin: "4px 0 0", paddingLeft: 16, lineHeight: 1.7 }}>
+          {surfaces.map((s, i) => <li key={i} className="mono" style={{ fontSize: 11.5 }}>{s}</li>)}
+        </ul>
+      )}
+      {!isDrift && skippedKeys.length > 0 && (
+        <ul style={{ margin: "4px 0 0", paddingLeft: 16, lineHeight: 1.7 }}>
+          {skippedKeys.map((k, i) => <li key={i} className="mono" style={{ fontSize: 11.5 }}>{k}</li>)}
+        </ul>
+      )}
+      {isDrift && surfaces.length === 0 && <span> (surfaces unknown)</span>}
+    </div>
+  );
+}
+
+/* ---- Rollback modal ---- */
 function RollbackModalLive({ store }) {
-  const row = store.rows.find((r) => r.id === store.modal.rowId);
-  const detail = useDetail(row?.id);
+  const isBulk = store.modal.bulk === true;
+  const rowId = store.modal.rowId;
+  const bulkIds = store.modal.ids || [];
+  const driftError = store.modal.driftError || null;
+
+  const row = !isBulk ? store.rows.find((r) => r.id === rowId) : null;
+  const detail = useDetail(!isBulk ? rowId : null);
   const summary = summarizeSnapshot(detail.snapshot);
+
+  const [force, setForce] = React.useState(!!driftError);
 
   React.useEffect(() => {
     const handler = (e) => {
       if (e.key === "Escape") store.closeModal();
-      else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) store.performRollback(row.id);
+      else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        if (isBulk) store.performBulkRollback(bulkIds, force);
+        else store.performRollback(rowId, force);
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [row, store]);
+  }, [row, store, force, isBulk, bulkIds, rowId]);
+
+  const handleConfirm = () => {
+    if (isBulk) store.performBulkRollback(bulkIds, force);
+    else store.performRollback(rowId, force);
+  };
 
   return (
     <div className="hy-modal-overlay" onClick={(e) => { if (e.target.classList.contains("hy-modal-overlay")) store.closeModal(); }}>
@@ -1153,42 +1757,119 @@ function RollbackModalLive({ store }) {
         <div className="hy-modal-head">
           <div className="hy-modal-icon">↺</div>
           <div>
-            <h2 id="hy-rb-live-title">Roll back invocation #{row.id}?</h2>
-            <p className="dim hy-modal-sub">
-              {detail.snapshot
-                ? <>This restores state from snapshot <span className="mono">#{detail.snapshot.id}</span></>
-                : "No snapshot is available for this invocation."}
-            </p>
+            {isBulk ? (
+              <>
+                <h2 id="hy-rb-live-title">Roll back {bulkIds.length} invocations?</h2>
+                <p className="dim hy-modal-sub">This will restore state from each invocation's snapshot.</p>
+              </>
+            ) : (
+              <>
+                <h2 id="hy-rb-live-title">Roll back invocation #{rowId}?</h2>
+                <p className="dim hy-modal-sub">
+                  {detail.snapshot
+                    ? <>This restores state from snapshot <span className="mono">#{detail.snapshot.id}</span></>
+                    : "No snapshot is available for this invocation."}
+                </p>
+              </>
+            )}
           </div>
           <button className="hy-modal-close" aria-label="Close" onClick={store.closeModal}>×</button>
         </div>
 
         <div className="hy-modal-body">
-          <div className="hy-modal-summary">
-            <div><span className="dim hy-modal-k">Ability</span><span className="mono">{row.ability}</span></div>
-            <div><span className="dim hy-modal-k">When</span><span>{row.when}{row.user && <span className="dim"> · by {row.user.name}</span>}</span></div>
-            <div><span className="dim hy-modal-k">Surfaces</span>
-              <span>
-                {summary.list.length === 0
-                  ? <span className="dim">none</span>
-                  : summary.list.map((s, i) => <span key={i} className="mono hy-modal-surface">{s.surface}</span>)}
-              </span>
+          {driftError && <DriftCallout driftError={driftError} />}
+
+          {!isBulk && (
+            <div className="hy-modal-summary">
+              <div><span className="dim hy-modal-k">Ability</span><span className="mono">{row?.ability}</span></div>
+              <div><span className="dim hy-modal-k">When</span><span>{row?.when}{row?.user && <span className="dim"> · by {row.user.name}</span>}</span></div>
+              <div><span className="dim hy-modal-k">Surfaces</span>
+                <span>
+                  {summary.list.length === 0
+                    ? <span className="dim">none</span>
+                    : summary.list.map((s, i) => <span key={i} className="mono hy-modal-surface">{s.surface}</span>)}
+                </span>
+              </div>
+              <div><span className="dim hy-modal-k">Reverts</span><span>{summary.keys} keys across {summary.surfaces} surfaces</span></div>
             </div>
-            <div><span className="dim hy-modal-k">Reverts</span><span>{summary.keys} keys across {summary.surfaces} surfaces</span></div>
-          </div>
+          )}
+
+          {isBulk && (
+            <div className="hy-modal-summary">
+              <div><span className="dim hy-modal-k">Count</span><span>{bulkIds.length} invocations selected</span></div>
+              <div><span className="dim hy-modal-k">IDs</span><span className="mono" style={{ fontSize: 11 }}>{bulkIds.slice(0, 8).join(", ")}{bulkIds.length > 8 ? ` + ${bulkIds.length - 8} more` : ""}</span></div>
+            </div>
+          )}
 
           <div className="hy-modal-warn">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 1.5l7 13H1l7-13z" /><path d="M8 6v4M8 12v.01" strokeLinecap="round" /></svg>
-            <span>Changes made by other plugins or users since {row.abs} will be overwritten.</span>
+            <span>Changes made by other plugins or users since the snapshot was taken will be overwritten.</span>
           </div>
+
+          {(driftError || isBulk) && (
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 13, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={force}
+                onChange={(e) => setForce(e.target.checked)}
+              />
+              Force rollback anyway {driftError ? "(ignore drift)" : "(ignore drift and partial errors)"}
+            </label>
+          )}
         </div>
 
         <div className="hy-modal-foot">
           <span className="dim hy-modal-kbd-hint"><kbd className="cp-kbd">esc</kbd> cancel · <kbd className="cp-kbd">⌘↵</kbd> confirm</span>
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             <button className="btn" onClick={store.closeModal}>Cancel</button>
-            <button className="btn btn-danger" onClick={() => store.performRollback(row.id)}>Roll back</button>
+            <button className="btn btn-danger" onClick={handleConfirm}>
+              {isBulk ? `Roll back ${bulkIds.length}` : "Roll back"}
+            </button>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---- Bulk errors modal ---- */
+function BulkErrorsModal({ data, onClose }) {
+  const { skipped = {}, errors = {} } = data;
+  return (
+    <div className="hy-modal-overlay" onClick={(e) => { if (e.target.classList.contains("hy-modal-overlay")) onClose(); }}>
+      <div className="hy-modal" role="dialog" aria-modal="true">
+        <div className="hy-modal-head">
+          <div className="hy-modal-icon">!</div>
+          <div>
+            <h2>Bulk rollback results</h2>
+            <p className="dim hy-modal-sub">{Object.keys(skipped).length} skipped · {Object.keys(errors).length} errored</p>
+          </div>
+          <button className="hy-modal-close" aria-label="Close" onClick={onClose}>×</button>
+        </div>
+        <div className="hy-modal-body">
+          {Object.keys(skipped).length > 0 && (
+            <>
+              <p><strong>Skipped</strong> (soft/informational):</p>
+              <ul style={{ margin: "0 0 12px", paddingLeft: 16, fontSize: 12 }}>
+                {Object.entries(skipped).map(([id, code]) => (
+                  <li key={id} className="mono">#{id} - {code}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {Object.keys(errors).length > 0 && (
+            <>
+              <p><strong>Errors</strong> (hard failures):</p>
+              <ul style={{ margin: "0 0 12px", paddingLeft: 16, fontSize: 12 }}>
+                {Object.entries(errors).map(([id, code]) => (
+                  <li key={id} className="mono" style={{ color: "var(--err-fg)" }}>#{id} - {code}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+        <div className="hy-modal-foot">
+          <button className="btn" style={{ marginLeft: "auto" }} onClick={onClose}>Close</button>
         </div>
       </div>
     </div>
@@ -1209,6 +1890,7 @@ function ToastStack({ store }) {
             <div className="dim">
               {t.body}
               {t.undoRowId && <> · <a href="#" onClick={(e) => { e.preventDefault(); store.undoRollback(t.undoRowId); store.dismissToast(t.id); }}>Undo</a></>}
+              {t.onViewErrors && <> · <a href="#" onClick={(e) => { e.preventDefault(); t.onViewErrors(); store.dismissToast(t.id); }}>View errors</a></>}
             </div>
             {t.kind === "pending" && <div className="hy-toast-progress"><span style={{ width: "62%" }} /></div>}
           </div>
@@ -1226,6 +1908,7 @@ function PrototypeApp() {
     <>
       {store.view.name === "list" ? <ListScreen store={store} /> : <DetailScreen store={store} />}
       {store.modal && <RollbackModalLive store={store} />}
+      {store.bulkErrorsModal && <BulkErrorsModal data={store.bulkErrorsModal} onClose={() => store.setBulkErrorsModal(null)} />}
       <ToastStack store={store} />
     </>
   );
