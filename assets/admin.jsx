@@ -113,15 +113,34 @@ function dayLabelFor(key, date) {
   return { label: fmt(date), sub: `${diffDays} days ago` };
 }
 
-const SUGGESTIONS_DICT = {
+// Static suggestion lists for fields whose values come from a fixed enum.
+// User-domain values (ability names, caller ids, user names) are derived
+// from the actual loaded rows at render time - see suggestionsFor() below
+// - so we never propose filters that have zero matches.
+const STATIC_SUGGESTIONS = {
   status: ["ok", "error", "rolled", "pending"],
-  caller: ["rest", "cli", "internal"],
-  user: ["sarah", "maya", "david", "rohan", "jordan"],
-  ability: ["woocommerce/*", "acme-seo/*", "wordpress/*", "fluent-forms/*", "yoast/*"],
   since: ["15m", "1h", "24h", "7d"],
   has: ["snapshot", "error", "rollback"],
   destructive: ["true", "false"],
 };
+
+// Token keys we know about (used for the `key:` autocomplete step).
+const SUGGEST_KEYS = ["status", "caller", "user", "ability", "since", "has", "destructive"];
+
+// Derive value suggestions for `<key>:<partial>` from current row data.
+// Falls back to STATIC_SUGGESTIONS for fixed enums.
+function suggestionsFor(key, rows) {
+  if (STATIC_SUGGESTIONS[key]) return STATIC_SUGGESTIONS[key];
+  const set = new Set();
+  if (key === "ability") {
+    rows.forEach((r) => { if (r.ability) set.add(r.ability); });
+  } else if (key === "caller") {
+    rows.forEach((r) => { if (r.caller) set.add(r.caller); });
+  } else if (key === "user") {
+    rows.forEach((r) => { if (r.user?.name) set.add(r.user.name); });
+  }
+  return [...set].sort();
+}
 
 function statusGlyph2(s) {
   return {
@@ -434,20 +453,20 @@ function TokenSearch({ store }) {
     if (!text) return [];
     const colonIdx = text.indexOf(":");
     if (colonIdx === -1) {
-      return Object.keys(SUGGESTIONS_DICT)
+      return SUGGEST_KEYS
         .filter((k) => k.startsWith(text.toLowerCase()))
         .slice(0, 6)
         .map((k) => ({ display: `${k}:`, complete: k + ":", isKey: true }));
     } else {
       const key = text.slice(0, colonIdx).toLowerCase();
       const partial = text.slice(colonIdx + 1).toLowerCase();
-      const dict = SUGGESTIONS_DICT[key] || [];
-      return dict
+      const values = suggestionsFor(key, store.rows);
+      return values
         .filter((v) => v.toLowerCase().includes(partial))
         .slice(0, 6)
         .map((v) => ({ display: `${key}:${v}`, key, value: v, isKey: false }));
     }
-  }, [store.query]);
+  }, [store.query, store.rows]);
 
   React.useEffect(() => {
     const handler = (e) => {
