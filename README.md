@@ -2,7 +2,7 @@
 
 Snapshot + audit + rollback + approval middleware for the WordPress Abilities API.
 
-**Status:** v0.7-dev. Not production ready, but feature-complete for the snapshot/audit/rollback/approval core.
+**Status:** v0.8-dev. Not production ready, but feature-complete for the snapshot/audit/rollback/approval core, with extensibility for custom collectors via `safety.collectors`.
 
 ## What it is
 
@@ -51,7 +51,7 @@ wp_register_ability( 'my-plugin/update-product-price', array(
 ## Surfaces (interfaces to your plugin)
 
 - **PHP API** - `wp_register_ability( $name, [ ..., 'safety' => [...] ] )` and helpers `abilityguard_rollback`, `abilityguard_snapshot_meta`, `abilityguard_snapshot_options`.
-- **REST** - `GET /abilityguard/v1/log`, `GET /log/<id>` (returns log row + decoded snapshot + parent + children + log_meta), `POST /rollback/<id>`, `POST /rollback/bulk`, `GET /approval`, `POST /approval/<id>/approve`, `POST /approval/<id>/reject`, `GET /retention`.
+- **REST** - `GET /abilityguard/v1/log`, `GET /log/<id>` (returns log row + decoded snapshot + parent + children + log_meta), `GET /log/export` (CSV/JSON with the same filter args), `POST /rollback/<id>`, `POST /rollback/bulk`, `GET /approval`, `POST /approval/<id>/approve`, `POST /approval/<id>/reject`, `POST /approval/bulk`, `GET /approval/export`, `GET /retention`, `POST /retention/prune`.
 - **WP-CLI** - `wp abilityguard log list/show`, `wp abilityguard rollback <id>`, `wp abilityguard approval list/approve/reject <id>`, `wp abilityguard prune`.
 - **wp-admin** - Tools → AbilityGuard. Hybrid timeline + command-palette search + per-day pagination, snapshot drawer, JSON-highlighted Input/Result tabs, "Invocation chain" navigation between parent and child invocations, "Rollback signals" card surfacing changed/deleted file paths, and real rollback against the captured snapshot.
 

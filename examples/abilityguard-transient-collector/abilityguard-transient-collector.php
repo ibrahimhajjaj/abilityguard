@@ -92,10 +92,11 @@ final class TransientCollector implements CollectorInterface {
 }
 
 /**
- * Workaround pattern (current): use safety.snapshot to capture via your own
- * collector, persist captured state alongside the invocation, and restore via
- * the abilityguard_rollback action. Until safety.collectors lands, this is
- * the canonical extensibility seam.
+ * Wires the collector via safety.collectors. This is the v0.8+ idiomatic
+ * way: declare the surface in safety.snapshot and pass an instance under
+ * safety.collectors with the matching key. AbilityGuard handles capture,
+ * post-state snapshot, drift detection, and restore - no side-channel
+ * options, no global invocation_id chasing.
  */
 add_action(
 	'wp_abilities_api_categories_init',
@@ -131,63 +132,21 @@ add_action(
 				'execute_callback'    => static function ( $input ): array {
 					$key = (string) $input['key'];
 					set_transient( $key, (string) $input['value'], HOUR_IN_SECONDS );
-
-					// Workaround: capture-and-stash on the side. AbilityGuard's
-					// built-in surfaces don't know about transients, so we hand
-					// the captured payload to a per-invocation option and pick
-					// it up in the rollback handler below.
-					$collector = new TransientCollector();
-					$captured  = $collector->collect( array( $key ) );
-
-					$invocation_id = $GLOBALS['abilityguard_current_invocation_id'] ?? null;
-					if ( null === $invocation_id ) {
-						// Fall back: read the most recent log row's invocation_id.
-						global $wpdb;
-						$invocation_id = (string) $wpdb->get_var(
-							"SELECT invocation_id FROM {$wpdb->prefix}abilityguard_log ORDER BY id DESC LIMIT 1"
-						);
-					}
-					if ( '' !== (string) $invocation_id ) {
-						update_option( 'examples_transient_snap_' . $invocation_id, $captured, false );
-					}
-
 					return array(
 						'ok'  => true,
 						'key' => $key,
 					);
 				},
-				// Declares post_meta=[] just so AbilityGuard treats this as a
-				// safety-bearing ability. The real snapshot is taken inside
-				// execute_callback via the workaround above.
 				'safety'              => array(
 					'destructive' => true,
-					'snapshot'    => static fn() => array(),
+					'snapshot'    => static fn( $input ) => array(
+						'transient' => array( (string) ( $input['key'] ?? '' ) ),
+					),
+					'collectors'  => array(
+						'transient' => new TransientCollector(),
+					),
 				),
 			)
 		);
 	}
-);
-
-add_action(
-	'abilityguard_invocation_started',
-	static function ( string $invocation_id ): void {
-		$GLOBALS['abilityguard_current_invocation_id'] = $invocation_id;
-	}
-);
-
-add_action(
-	'abilityguard_rollback',
-	static function ( array $log ): void {
-		if ( 'examples-transient/refresh-cache' !== ( $log['ability_name'] ?? '' ) ) {
-			return;
-		}
-		$key      = 'examples_transient_snap_' . $log['invocation_id'];
-		$captured = get_option( $key );
-		if ( is_array( $captured ) ) {
-			( new TransientCollector() )->restore( $captured );
-			delete_option( $key );
-		}
-	},
-	10,
-	1
 );

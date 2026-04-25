@@ -118,11 +118,33 @@ final class MailingListCollector implements CollectorInterface {
 
 ## Registering a custom collector for an ability
 
-**As of v0.7, `safety.collectors` is still not wired.** `SnapshotService` and `RollbackService` accept an optional `?array $collectors` map in their constructors (see `src/Snapshot/SnapshotService.php` and `src/Rollback/RollbackService.php`), but the wrapper-driven flow always uses the default map of built-in surfaces. The `safety.collectors` shorthand is reserved on the API surface (`docs/api-stability.md`) but not implemented.
+As of v0.8, the cleanest path is the **`safety.collectors` shorthand**:
 
-### Two workarounds that ship today
+```php
+'safety' => array(
+    'destructive' => true,
+    'snapshot'    => array(
+        'mailing_list' => array( 101, 102, 103 ),
+    ),
+    'collectors'  => array(
+        'mailing_list' => new \AcmePlugin\AbilityGuard\MailingListCollector(),
+    ),
+),
+```
 
-#### A. Action-based snapshot side-channel (recommended)
+What happens behind the scenes:
+
+- At `wp_register_ability_args` time, AbilityGuard pulls each entry out of `safety.collectors` and passes it to `CollectorRegistry::register()`. The registration is global to the request - once you register a `mailing_list` collector for one ability, every other ability using the `mailing_list` surface name in this request will see it too.
+- `safety.collectors` is then stripped before the rest of the wrapper sees `safety[]`, so it never reaches the audit row.
+- Keys matching built-in surfaces (`post_meta`, `options`, `taxonomy`, `user_role`, `files`) are silently ignored - `CollectorRegistry::defaults()` always wins for those names. If you want to swap a built-in collector, construct your own `SnapshotService` directly instead.
+
+That's it. No need to track `invocation_id` in a global, no `abilityguard_rollback` listener, no side-channel option to garbage-collect.
+
+### Older patterns (still valid)
+
+If you can't use `safety.collectors` (for example, you need a different collector instance per invocation, or you want to swap a built-in), two escape hatches still ship:
+
+#### A. Action-based snapshot side-channel
 
 Implement your own collector, run `collect()` inside your ability's `execute_callback`, persist the captured payload as a WordPress option keyed by `invocation_id`, and restore via the `abilityguard_rollback` action. AbilityGuard fires `abilityguard_invocation_started` with the invocation id before your callback runs, so you can stash it in a global for use during execute:
 
@@ -177,9 +199,12 @@ $service = new \AbilityGuard\Snapshot\SnapshotService(
 
 This bypasses the global wrapper, so you also lose the lock, the audit row, the approval gate, and drift detection - only useful when you're building a parallel pipeline (e.g. your own bulk import tool that wants snapshot+restore semantics without going through the abilities API).
 
-### Will `safety.collectors` land?
+### Drift-check semantics for custom surfaces
 
-It's still on the roadmap as the cleanest seam - registration-time injection that doesn't ask plugin authors to side-channel state through options. No commitment to a release; tracked alongside the v0.8 file-rollback redesign.
+When you register a custom surface via `safety.collectors`, AbilityGuard's drift detector at rollback time calls your collector's `collect()` again with `array_keys($captured)` as the spec - i.e. it derives the spec from the captured state's top-level keys. That works for collectors that capture by id (`string[]` or `int[]` keyed maps, like the `MailingListCollector` example above). If your spec is richer (nested filter arrays, time windows), you have two options:
+
+1. Make your collector tolerant of `string[]` spec input (treat each as an id and re-read live state).
+2. Skip drift detection for that ability with `safety.skip_drift_check = true` and accept that rollback will overwrite drifted state.
 
 ## Key pitfalls
 

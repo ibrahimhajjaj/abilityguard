@@ -1323,6 +1323,12 @@ function ApprovalsView({ store }) {
           <button className="btn-link" style={{ fontSize: 11 }} onClick={() => setFilterText("")}>clear</button>
         )}
         <button className="btn-link" style={{ fontSize: 12 }} onClick={load}>Refresh</button>
+        <a
+          href={restUrl("approval/export", { format: "csv", status: "pending", _wpnonce: BOOT.rest.nonce })}
+          className="btn-link"
+          style={{ fontSize: 11 }}
+          title="Download pending approvals as CSV"
+        >Export CSV</a>
         {selected.size > 0 && (
           <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
             <button

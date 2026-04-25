@@ -207,6 +207,33 @@ final class RestController {
 
 		register_rest_route(
 			self::NAMESPACE,
+			'/approval/export',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'permission_callback' => array( __CLASS__, 'check_approval_perms' ),
+				'callback'            => array( __CLASS__, 'export_approvals' ),
+				'args'                => array(
+					'format' => array(
+						'type'    => 'string',
+						'default' => 'csv',
+						'enum'    => array( 'csv', 'json' ),
+					),
+					'limit'  => array(
+						'type'    => 'integer',
+						'default' => 5000,
+						'minimum' => 1,
+						'maximum' => 50000,
+					),
+					'status' => array(
+						'type'    => 'string',
+						'default' => 'pending',
+					),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
 			'/approval/bulk',
 			array(
 				'methods'             => WP_REST_Server::CREATABLE,
@@ -689,5 +716,82 @@ final class RestController {
 			),
 			200
 		);
+	}
+
+	/**
+	 * GET /approval/export - flat CSV/JSON dump of approval rows.
+	 *
+	 * Mirrors `/log/export`. Honours the same status filter as `/approval`.
+	 *
+	 * @param \WP_REST_Request $req Request.
+	 */
+	public static function export_approvals( WP_REST_Request $req ): WP_REST_Response|WP_Error {
+		$format = (string) $req->get_param( 'format' );
+		$limit  = max( 1, min( 50000, (int) $req->get_param( 'limit' ) ) );
+		$status = (string) $req->get_param( 'status' );
+
+		$filters = array(
+			'status'   => '' !== $status ? $status : 'pending',
+			'per_page' => $limit,
+			'offset'   => 0,
+		);
+
+		$rows = ( new ApprovalRepository() )->list( $filters );
+
+		if ( 'csv' === $format ) {
+			$columns = array(
+				'id',
+				'log_id',
+				'ability_name',
+				'status',
+				'requested_by',
+				'decided_by',
+				'decided_at',
+				'created_at',
+			);
+
+			// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- in-memory php://temp stream.
+			$buffer = fopen( 'php://temp', 'r+' );
+			if ( false === $buffer ) {
+				return new WP_Error( 'abilityguard_export_buffer', 'Could not open temp buffer.', array( 'status' => 500 ) );
+			}
+			fputcsv( $buffer, $columns );
+			foreach ( $rows as $row ) {
+				$line = array();
+				foreach ( $columns as $column ) {
+					$line[] = isset( $row[ $column ] ) ? (string) $row[ $column ] : '';
+				}
+				fputcsv( $buffer, $line );
+			}
+			rewind( $buffer );
+			$csv = (string) stream_get_contents( $buffer );
+			fclose( $buffer );
+			// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
+
+			add_filter(
+				'rest_pre_serve_request',
+				static function ( bool $served, $result ) use ( $csv ): bool {
+					unset( $result );
+					if ( $served ) {
+						return $served;
+					}
+					if ( ! headers_sent() ) {
+						header( 'Content-Type: text/csv; charset=utf-8' );
+						header( 'Content-Disposition: attachment; filename="abilityguard-approvals.csv"' );
+					}
+					// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+					echo $csv;
+					return true;
+				},
+				10,
+				2
+			);
+
+			return new WP_REST_Response( '', 200 );
+		}
+
+		$response = new WP_REST_Response( $rows, 200 );
+		$response->header( 'Content-Disposition', 'attachment; filename="abilityguard-approvals.json"' );
+		return $response;
 	}
 }

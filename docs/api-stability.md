@@ -28,6 +28,8 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 |---|---|---|
 | `AbilityGuard\Audit\LogMeta` | 0.6 | `LogMeta::set( $log_id, $key, $value )` and `LogMeta::get_all( $log_id, $key )` for reading/writing the `log_meta` extensible store |
 | `AbilityGuard\Snapshot\Collector\CriticalFileRegistry` | 0.7 | `add( $suffix )`, `remove( $suffix )`, `matches( $path )`, `all()` for managing the critical-file allowlist used by `FilesCollector::STRATEGY_CRITICAL_HASH` |
+| `AbilityGuard\Snapshot\Collector\CollectorRegistry` | 0.8 | `register( $surface, $collector )`, `has( $surface )`, `defaults()` - process-wide registry of custom collectors layered over the built-ins. `safety.collectors` writes to this. |
+| `AbilityGuard\Snapshot\Collector\CollectorInterface` | 0.1 | The contract custom collectors must implement: `collect( $spec ): array` and `restore( array $captured ): void`. |
 
 ### Safety config keys (passed to `wp_register_ability` under `safety`)
 
@@ -41,7 +43,7 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `max_payload_bytes` | 0.3 | int - 0 disables truncation |
 | `skip_drift_check` | 0.6 | bool - when true the wrapper auto-writes a `log_meta` row that RollbackService reads to bypass drift |
 | `lock_timeout` | 0.4 | int - seconds; 0 = fail fast; -1 = lock disabled |
-| `collectors` | - | reserved for a future minor, not yet wired |
+| `collectors` | 0.8 | `array<string, CollectorInterface>` - register custom collectors for non-built-in surfaces. Keys matching built-in surfaces (`post_meta`, `options`, `taxonomy`, `user_role`, `files`) are silently ignored. |
 
 ### Snapshot surfaces (keys returned by the `snapshot` resolver)
 
@@ -96,10 +98,14 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `GET` | `/log/<id>` | 0.1 | `manage_options` |
 | `POST` | `/rollback/<id>` | 0.1 | `manage_options` |
 | `POST` | `/rollback/bulk` | 0.4 | `manage_options` |
+| `GET` | `/log/export` | 0.7 | `manage_options` |
 | `GET` | `/approval` | 0.5 | `manage_abilityguard_approvals` |
 | `POST` | `/approval/<id>/approve` | 0.4 | `manage_abilityguard_approvals` |
 | `POST` | `/approval/<id>/reject` | 0.4 | `manage_abilityguard_approvals` |
+| `POST` | `/approval/bulk` | 0.7 | `manage_abilityguard_approvals` |
+| `GET` | `/approval/export` | 0.8 | `manage_abilityguard_approvals` |
 | `GET` | `/retention` | 0.5 | `manage_options` |
+| `POST` | `/retention/prune` | 0.7 | `manage_options` |
 
 ### WP-CLI subcommands
 

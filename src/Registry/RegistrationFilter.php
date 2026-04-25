@@ -12,6 +12,8 @@ namespace AbilityGuard\Registry;
 use AbilityGuard\Approval\ApprovalService;
 use AbilityGuard\Contracts\AuditLoggerInterface;
 use AbilityGuard\Contracts\SnapshotServiceInterface;
+use AbilityGuard\Snapshot\Collector\CollectorInterface;
+use AbilityGuard\Snapshot\Collector\CollectorRegistry;
 
 /**
  * Inserts the AbilityGuard wrapper into execute_callback when the ability's
@@ -57,6 +59,22 @@ final class RegistrationFilter {
 		}
 		if ( empty( $args['execute_callback'] ) || ! is_callable( $args['execute_callback'] ) ) {
 			return $args;
+		}
+
+		// Register custom collectors declared on this ability so SnapshotService
+		// + RollbackService can find them at capture and rollback time. Keys
+		// matching built-in surfaces are silently ignored by CollectorRegistry,
+		// since silently swapping the file/options collectors site-wide would
+		// be a footgun far worse than the boilerplate it would save.
+		if ( isset( $args['safety']['collectors'] ) && is_array( $args['safety']['collectors'] ) ) {
+			foreach ( $args['safety']['collectors'] as $surface => $collector ) {
+				if ( is_string( $surface ) && $collector instanceof CollectorInterface ) {
+					CollectorRegistry::register( $surface, $collector );
+				}
+			}
+			// Keep the rest of safety[] intact; just drop `collectors` so the
+			// AbilityWrapper doesn't have to reason about it.
+			unset( $args['safety']['collectors'] );
 		}
 
 		$wrapper                  = new AbilityWrapper( $this->snapshots, $this->audit, $name, $args['safety'] );

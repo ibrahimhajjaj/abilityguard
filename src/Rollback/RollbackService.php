@@ -13,11 +13,7 @@ use AbilityGuard\Audit\LogMeta;
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Installer;
 use AbilityGuard\Snapshot\Collector\CollectorInterface;
-use AbilityGuard\Snapshot\Collector\FilesCollector;
-use AbilityGuard\Snapshot\Collector\OptionsCollector;
-use AbilityGuard\Snapshot\Collector\PostMetaCollector;
-use AbilityGuard\Snapshot\Collector\TaxonomyCollector;
-use AbilityGuard\Snapshot\Collector\UserRoleCollector;
+use AbilityGuard\Snapshot\Collector\CollectorRegistry;
 use AbilityGuard\Snapshot\SnapshotStore;
 use AbilityGuard\Support\Cipher;
 use AbilityGuard\Support\Hash;
@@ -69,16 +65,15 @@ final class RollbackService {
 		private LogRepository $logs,
 		private SnapshotStore $snapshots,
 		private ?array $collectors = null
-	) {
-		if ( null === $this->collectors ) {
-			$this->collectors = array(
-				'post_meta' => new PostMetaCollector(),
-				'options'   => new OptionsCollector(),
-				'taxonomy'  => new TaxonomyCollector(),
-				'user_role' => new UserRoleCollector(),
-				'files'     => new FilesCollector(),
-			);
-		}
+	) {}
+
+	/**
+	 * Resolve the active collector map, registry-aware. See SnapshotService.
+	 *
+	 * @return array<string, CollectorInterface>
+	 */
+	private function active_collectors(): array {
+		return null !== $this->collectors ? $this->collectors : CollectorRegistry::defaults();
 	}
 
 	/**
@@ -121,9 +116,11 @@ final class RollbackService {
 		$drifted_surfaces = array();
 		$post_state       = is_array( $snapshot['post_state'] ?? null ) ? $snapshot['post_state'] : null;
 
+		$collectors = $this->active_collectors();
+
 		if ( null !== $post_state ) {
 			foreach ( $snapshot['surfaces'] as $surface => $captured ) {
-				if ( ! isset( $this->collectors[ $surface ] ) || ! is_array( $captured ) ) {
+				if ( ! isset( $collectors[ $surface ] ) || ! is_array( $captured ) ) {
 					continue;
 				}
 				if ( ! isset( $post_state[ $surface ] ) || ! is_array( $post_state[ $surface ] ) ) {
@@ -131,7 +128,7 @@ final class RollbackService {
 				}
 
 				$spec     = $this->derive_spec( $surface, $captured );
-				$current  = $this->collectors[ $surface ]->collect( $spec );
+				$current  = $collectors[ $surface ]->collect( $spec );
 				$expected = $post_state[ $surface ];
 
 				if ( Hash::stable( $current ) !== Hash::stable( $expected ) ) {
@@ -189,7 +186,7 @@ final class RollbackService {
 
 		$skipped = array(); // Keys not restored due to failed decryption or v0.3 sentinel.
 		foreach ( $snapshot['surfaces'] as $surface => $captured ) {
-			if ( ! isset( $this->collectors[ $surface ] ) || ! is_array( $captured ) ) {
+			if ( ! isset( $collectors[ $surface ] ) || ! is_array( $captured ) ) {
 				continue;
 			}
 
@@ -212,7 +209,7 @@ final class RollbackService {
 			}
 
 			if ( array() !== $restorable ) {
-				$this->collectors[ $surface ]->restore( $restorable );
+				$collectors[ $surface ]->restore( $restorable );
 			}
 		}
 
@@ -310,10 +307,21 @@ final class RollbackService {
 				// Spec: string[] of absolute paths. Captured keys ARE the paths.
 				return array_keys( $captured );
 
-			default:
-				// For taxonomy, user_role: pass captured data as spec.
-				// The collectors can use the captured shape to re-read live state.
+			case 'taxonomy':
+			case 'user_role':
+				// Captured shape is the natural spec for these (collectors read
+				// it back as a structured map).
 				return $captured;
+
+			default:
+				// Custom (safety.collectors) surfaces. We don't know the spec
+				// shape the registered collector originally received, so the
+				// safest choice is to pass the captured top-level keys back.
+				// Collectors that capture by id (string[] / int[]) can re-read
+				// live state from those keys; collectors that need richer spec
+				// information should construct their own SnapshotService rather
+				// than rely on safety.collectors + drift detection.
+				return is_array( $captured ) ? array_keys( $captured ) : array();
 		}
 	}
 

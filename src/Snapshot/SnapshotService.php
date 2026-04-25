@@ -11,11 +11,7 @@ namespace AbilityGuard\Snapshot;
 
 use AbilityGuard\Contracts\SnapshotServiceInterface;
 use AbilityGuard\Snapshot\Collector\CollectorInterface;
-use AbilityGuard\Snapshot\Collector\FilesCollector;
-use AbilityGuard\Snapshot\Collector\OptionsCollector;
-use AbilityGuard\Snapshot\Collector\PostMetaCollector;
-use AbilityGuard\Snapshot\Collector\TaxonomyCollector;
-use AbilityGuard\Snapshot\Collector\UserRoleCollector;
+use AbilityGuard\Snapshot\Collector\CollectorRegistry;
 use AbilityGuard\Support\Cipher;
 use AbilityGuard\Support\Hash;
 use AbilityGuard\Support\PayloadCap;
@@ -44,16 +40,21 @@ final class SnapshotService implements SnapshotServiceInterface {
 	public function __construct(
 		private SnapshotStore $store,
 		private ?array $collectors = null
-	) {
-		if ( null === $this->collectors ) {
-			$this->collectors = array(
-				'post_meta' => new PostMetaCollector(),
-				'options'   => new OptionsCollector(),
-				'taxonomy'  => new TaxonomyCollector(),
-				'user_role' => new UserRoleCollector(),
-				'files'     => new FilesCollector(),
-			);
-		}
+	) {}
+
+	/**
+	 * Resolve the active collector map.
+	 *
+	 * When the service was constructed with an explicit `$collectors` array,
+	 * that map is frozen for the service's lifetime. Otherwise we look up
+	 * the registry on every call so collectors registered AFTER this
+	 * service was instantiated (typically via `safety.collectors` at
+	 * `wp_register_ability_args` time) become visible.
+	 *
+	 * @return array<string, CollectorInterface>
+	 */
+	private function active_collectors(): array {
+		return null !== $this->collectors ? $this->collectors : CollectorRegistry::defaults();
 	}
 
 	/**
@@ -75,12 +76,13 @@ final class SnapshotService implements SnapshotServiceInterface {
 			);
 		}
 
-		$surfaces = array();
+		$collectors = $this->active_collectors();
+		$surfaces   = array();
 		foreach ( $spec as $surface => $surface_spec ) {
-			if ( ! isset( $this->collectors[ $surface ] ) ) {
+			if ( ! isset( $collectors[ $surface ] ) ) {
 				continue;
 			}
-			$surfaces[ $surface ] = $this->collectors[ $surface ]->collect( $surface_spec );
+			$surfaces[ $surface ] = $collectors[ $surface ]->collect( $surface_spec );
 		}
 
 		// Hash BEFORE redaction + truncation so integrity is preserved.
@@ -125,12 +127,13 @@ final class SnapshotService implements SnapshotServiceInterface {
 			return;
 		}
 
-		$surfaces = array();
+		$collectors = $this->active_collectors();
+		$surfaces   = array();
 		foreach ( $spec as $surface => $surface_spec ) {
-			if ( ! isset( $this->collectors[ $surface ] ) ) {
+			if ( ! isset( $collectors[ $surface ] ) ) {
 				continue;
 			}
-			$surfaces[ $surface ] = $this->collectors[ $surface ]->collect( $surface_spec );
+			$surfaces[ $surface ] = $collectors[ $surface ]->collect( $surface_spec );
 		}
 
 		$redacted  = $this->redact_surfaces( $surfaces, $safety );

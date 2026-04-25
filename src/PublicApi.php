@@ -57,3 +57,30 @@ if ( ! function_exists( 'abilityguard_snapshot_options' ) ) {
 		return ( new \AbilityGuard\Snapshot\Collector\OptionsCollector() )->collect( $keys );
 	}
 }
+
+if ( ! function_exists( 'abilityguard_approval_url' ) ) {
+
+	/**
+	 * Build the wp-admin URL an approver clicks to review/decide a request.
+	 *
+	 * Used by the notification recipes in `docs/notifications.md`. The URL
+	 * lands on the AbilityGuard admin screen with the approvals tab pre-
+	 * selected and the focused approval id in the query string. Plugins
+	 * should treat this as the canonical "where do I go to approve" link
+	 * rather than building their own.
+	 *
+	 * @param int $approval_id Row id from wp_abilityguard_approvals.
+	 *
+	 * @return string Absolute URL.
+	 */
+	function abilityguard_approval_url( int $approval_id ): string {
+		return add_query_arg(
+			array(
+				'page'        => 'abilityguard',
+				'view'        => 'approvals',
+				'approval_id' => $approval_id,
+			),
+			admin_url( 'tools.php' )
+		);
+	}
+}

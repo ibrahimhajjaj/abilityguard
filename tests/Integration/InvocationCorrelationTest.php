@@ -206,6 +206,66 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 		$this->assertNull( InvocationStack::current(), 'stack must be empty after a throw' );
 	}
 
+	public function test_mcp_invoked_ability_has_no_parent_but_nested_call_does(): void {
+		// MCP-invoked top-level ability: caller_type=mcp, caller_id=server,
+		// parent_invocation_id=null. Its inner call to another wrapped
+		// ability should inherit parent_invocation_id from the MCP-invoked
+		// ability's invocation_id.
+		\AbilityGuard\Registry\McpContext::reset_for_tests();
+		\AbilityGuard\Registry\McpContext::register();
+
+		$fake_server = new class() {
+			public function get_server_id(): string {
+				return 'trial-mcp-server';
+			}
+		};
+		apply_filters( 'mcp_adapter_pre_tool_call', array(), 'whatever', null, $fake_server );
+
+		++self::$counter;
+		$inner_ability = 'corr-test/mcp-inner-' . self::$counter;
+		$inner_wrapper = new AbilityWrapper(
+			new SnapshotService( new SnapshotStore() ),
+			new AuditLogger(),
+			$inner_ability,
+			array( 'destructive' => false )
+		);
+		$inner = $inner_wrapper->wrap( static fn() => 'inner-ok' );
+
+		++self::$counter;
+		$outer_ability = 'corr-test/mcp-outer-' . self::$counter;
+		$outer_wrapper = new AbilityWrapper(
+			new SnapshotService( new SnapshotStore() ),
+			new AuditLogger(),
+			$outer_ability,
+			array( 'destructive' => false )
+		);
+		$outer = $outer_wrapper->wrap(
+			static function () use ( $inner ) {
+				$inner( null );
+				return 'outer-ok';
+			}
+		);
+
+		$outer( null );
+
+		$repo       = new LogRepository();
+		$outer_rows = $repo->list( array( 'ability_name' => $outer_ability ) );
+		$inner_rows = $repo->list( array( 'ability_name' => $inner_ability ) );
+
+		$this->assertSame( 'mcp', $outer_rows[0]['caller_type'], 'outer call should record MCP caller_type' );
+		$this->assertSame( 'trial-mcp-server', $outer_rows[0]['caller_id'], 'outer call should record server id' );
+		$this->assertNull( $outer_rows[0]['parent_invocation_id'], 'top-level MCP call has no parent ability' );
+
+		$this->assertSame( 'mcp', $inner_rows[0]['caller_type'], 'nested call inherits MCP caller_type - same request' );
+		$this->assertSame(
+			$outer_rows[0]['invocation_id'],
+			$inner_rows[0]['parent_invocation_id'],
+			'nested call must point to its MCP-invoked parent'
+		);
+
+		\AbilityGuard\Registry\McpContext::reset_for_tests();
+	}
+
 	public function test_files_changed_on_rollback_surfaces_to_log_meta(): void {
 		// Stage a real tmp file we can mutate to create file drift.
 		$path = tempnam( sys_get_temp_dir(), 'ag_corr_files_' );
