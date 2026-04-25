@@ -118,48 +118,68 @@ final class MailingListCollector implements CollectorInterface {
 
 ## Registering a custom collector for an ability
 
-**There is no public extensibility hook for collectors in v0.3.** `SnapshotService` and `RollbackService` each instantiate their collector map in their constructors with a hard-coded set of surface keys. You cannot inject a custom collector from outside without modifying AbilityGuard itself or forking `SnapshotService`.
+**As of v0.7, `safety.collectors` is still not wired.** `SnapshotService` and `RollbackService` accept an optional `?array $collectors` map in their constructors (see `src/Snapshot/SnapshotService.php` and `src/Rollback/RollbackService.php`), but the wrapper-driven flow always uses the default map of built-in surfaces. The `safety.collectors` shorthand is reserved on the API surface (`docs/api-stability.md`) but not implemented.
 
-### Workaround until v0.5
+### Two workarounds that ship today
 
-The cleanest current approach is to implement your own snapshot logic inside your ability's `execute_callback` and store the captured state as a WordPress option keyed by invocation id. Then hook `abilityguard_rollback` to trigger your restore:
+#### A. Action-based snapshot side-channel (recommended)
+
+Implement your own collector, run `collect()` inside your ability's `execute_callback`, persist the captured payload as a WordPress option keyed by `invocation_id`, and restore via the `abilityguard_rollback` action. AbilityGuard fires `abilityguard_invocation_started` with the invocation id before your callback runs, so you can stash it in a global for use during execute:
 
 ```php
 add_action(
+    'abilityguard_invocation_started',
+    static function ( string $invocation_id ): void {
+        $GLOBALS['abilityguard_current_invocation_id'] = $invocation_id;
+    }
+);
+
+add_action(
     'abilityguard_rollback',
-    function ( array $log, array $snapshot, array $drifted_surfaces ): void {
-        if ( 'acme-plugin/update-subscribers' !== $log['ability_name'] ) {
+    static function ( array $log ): void {
+        if ( 'acme-plugin/update-subscribers' !== ( $log['ability_name'] ?? '' ) ) {
             return;
         }
         $key      = 'acme_snapshot_' . $log['invocation_id'];
         $captured = get_option( $key );
-        if ( $captured ) {
+        if ( is_array( $captured ) ) {
             ( new \AcmePlugin\AbilityGuard\MailingListCollector() )->restore( $captured );
             delete_option( $key );
         }
     },
     10,
-    3
+    1
 );
 ```
 
-This is a workaround, not a pattern to build on.
+End-to-end reference: `examples/abilityguard-transient-collector/`. It ships a working `TransientCollector` exercised through this pattern.
 
-### Coming in v0.5: `safety.collectors`
+Notes:
+- Use a `safety.snapshot` callable returning `array()` (or any built-in spec you also need) so AbilityGuard treats your ability as safety-bearing - that's what triggers the wrapper, the lock, and the audit row. Without `safety` set, none of the actions fire.
+- The `abilityguard_rollback` action receives `( $log, $snapshot, $drifted_surfaces )` (3 args). Subscribe with `accepted_args=1` if you only need the log.
+- Clean up your stash option in `abilityguard_retention_prune` if you want it pruned alongside log rows; AbilityGuard does not garbage-collect side-channel options for you.
 
-A planned `safety.collectors` key will let you register custom collectors per ability without touching AbilityGuard internals:
+#### B. Inject your own services
+
+If you control the dispatch path (e.g. you call `wp_get_ability(...)->execute(...)` from your own code rather than going through REST/MCP), you can construct your own `SnapshotService` + `RollbackService` with a custom collector map:
 
 ```php
-// NOT YET AVAILABLE - v0.5 planned
-'safety' => array(
-    'snapshot'   => array( 'mailing_list' => array( 101, 102, 103 ) ),
-    'collectors' => array(
+$service = new \AbilityGuard\Snapshot\SnapshotService(
+    new \AbilityGuard\Snapshot\SnapshotStore(),
+    array(
+        // built-ins …
+        'post_meta'    => new \AbilityGuard\Snapshot\Collector\PostMetaCollector(),
+        // your custom one:
         'mailing_list' => new \AcmePlugin\AbilityGuard\MailingListCollector(),
-    ),
-),
+    )
+);
 ```
 
-AbilityGuard will merge the provided collectors into its internal map for that invocation. Until this ships, use the workaround above.
+This bypasses the global wrapper, so you also lose the lock, the audit row, the approval gate, and drift detection - only useful when you're building a parallel pipeline (e.g. your own bulk import tool that wants snapshot+restore semantics without going through the abilities API).
+
+### Will `safety.collectors` land?
+
+It's still on the roadmap as the cleanest seam - registration-time injection that doesn't ask plugin authors to side-channel state through options. No commitment to a release; tracked alongside the v0.8 file-rollback redesign.
 
 ## Key pitfalls
 

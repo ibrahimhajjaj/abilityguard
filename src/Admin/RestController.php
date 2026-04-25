@@ -197,6 +197,16 @@ final class RestController {
 
 		register_rest_route(
 			self::NAMESPACE,
+			'/retention/prune',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'permission_callback' => array( __CLASS__, 'check_perms' ),
+				'callback'            => array( __CLASS__, 'do_prune' ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
 			'/approval/bulk',
 			array(
 				'methods'             => WP_REST_Server::CREATABLE,
@@ -536,6 +546,28 @@ final class RestController {
 				'destructive_days' => $svc->retention_days_destructive(),
 				'last_pruned'      => $last_pruned,
 				'rows_pruned'      => $rows_pruned,
+			),
+			200
+		);
+	}
+
+	/**
+	 * POST /retention/prune - run the retention prune synchronously.
+	 *
+	 * Useful for ops who want to verify retention is wired without waiting
+	 * for the daily cron, and for testing the dashboard's last-pruned widget.
+	 *
+	 * @param \WP_REST_Request $req Request (unused).
+	 */
+	public static function do_prune( WP_REST_Request $req ): WP_REST_Response { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+		$svc    = new RetentionService();
+		$result = $svc->prune();
+		return new WP_REST_Response(
+			array(
+				'ok'                => true,
+				'logs_deleted'      => (int) ( $result['logs_deleted'] ?? 0 ),
+				'snapshots_deleted' => (int) ( $result['snapshots_deleted'] ?? 0 ),
+				'last_pruned'       => get_option( 'abilityguard_last_pruned', null ),
 			),
 			200
 		);

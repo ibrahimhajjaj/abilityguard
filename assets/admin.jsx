@@ -1097,12 +1097,28 @@ function ListScreen({ store }) {
 /* ---- Retention widget ---- */
 function RetentionWidget() {
   const [info, setInfo] = React.useState(null);
-  React.useEffect(() => {
+  const [pruning, setPruning] = React.useState(false);
+  const reload = React.useCallback(() => {
     fetch(restUrl("retention"), { headers: { "X-WP-Nonce": BOOT.rest.nonce } })
       .then((r) => r.json())
       .then((body) => { if (body && body.normal_days !== undefined) setInfo(body); })
       .catch(() => {});
   }, []);
+  React.useEffect(() => { reload(); }, [reload]);
+  const runPrune = () => {
+    setPruning(true);
+    fetch(restUrl("retention/prune"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-WP-Nonce": BOOT.rest.nonce },
+    })
+      .then((r) => r.json().then((body) => ({ ok: r.ok, body })))
+      .then(({ ok, body }) => {
+        setPruning(false);
+        if (!ok) return;
+        reload();
+      })
+      .catch(() => setPruning(false));
+  };
   if (!info) return null;
   const lastPrunedText = info.last_pruned
     ? relativeWhen(info.last_pruned.replace(" ", "T") + "Z", Date.now())
@@ -1115,6 +1131,13 @@ function RetentionWidget() {
       <span>Retention: <strong>{info.normal_days}d</strong> normal / <strong>{info.destructive_days}d</strong> destructive</span>
       <span>·</span>
       <span>Last pruned {lastPrunedText}{info.rows_pruned ? `, ${info.rows_pruned} rows` : ""}</span>
+      <button
+        className="btn-link"
+        style={{ fontSize: 11 }}
+        disabled={pruning}
+        onClick={runPrune}
+        title="Run the retention prune now instead of waiting for the daily cron"
+      >{pruning ? "pruning…" : "run now"}</button>
     </div>
   );
 }
@@ -1127,6 +1150,7 @@ function ApprovalsView({ store }) {
   const [acting, setActing] = React.useState({}); // id -> true
   const [selected, setSelected] = React.useState(new Set());
   const [bulkActing, setBulkActing] = React.useState(false);
+  const [filterText, setFilterText] = React.useState("");
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -1248,7 +1272,14 @@ function ApprovalsView({ store }) {
     );
   }
 
-  const allSelected = approvals.length > 0 && selected.size === approvals.length;
+  const q = filterText.trim().toLowerCase();
+  const visibleApprovals = q
+    ? approvals.filter((a) => {
+        const hay = `${a.ability_name || ""} #${a.id} #${a.log_id || ""}`.toLowerCase();
+        return hay.includes(q);
+      })
+    : approvals;
+  const allSelected = visibleApprovals.length > 0 && visibleApprovals.every((a) => selected.has(a.id));
 
   return (
     <div>
@@ -1256,12 +1287,41 @@ function ApprovalsView({ store }) {
         <input
           type="checkbox"
           checked={allSelected}
-          onChange={toggleAll}
-          aria-label="Select all approvals"
-          title="Select all"
+          onChange={() => {
+            // Select-all toggles the currently visible (filtered) set, not the full list,
+            // so a filtered "approve all 3 matching" doesn't accidentally hit hidden rows.
+            setSelected((prev) => {
+              const next = new Set(prev);
+              if (visibleApprovals.every((a) => prev.has(a.id))) {
+                visibleApprovals.forEach((a) => next.delete(a.id));
+              } else {
+                visibleApprovals.forEach((a) => next.add(a.id));
+              }
+              return next;
+            });
+          }}
+          aria-label="Select all visible approvals"
+          title="Select all visible"
           style={{ marginRight: 6 }}
         />
-        <span className="dim" style={{ fontSize: 12 }}>{approvals.length} pending{selected.size > 0 ? ` · ${selected.size} selected` : ""}</span>
+        <span className="dim" style={{ fontSize: 12 }}>
+          {q ? `${visibleApprovals.length} of ${approvals.length} match` : `${approvals.length} pending`}
+          {selected.size > 0 ? ` · ${selected.size} selected` : ""}
+        </span>
+        <input
+          type="text"
+          value={filterText}
+          onChange={(e) => setFilterText(e.target.value)}
+          placeholder="Filter by ability or id…"
+          style={{
+            fontSize: 12, padding: "4px 8px", borderRadius: 4,
+            border: "1px solid var(--border)", background: "var(--bg-alt)",
+            color: "var(--ink-1)", minWidth: 200,
+          }}
+        />
+        {q && (
+          <button className="btn-link" style={{ fontSize: 11 }} onClick={() => setFilterText("")}>clear</button>
+        )}
         <button className="btn-link" style={{ fontSize: 12 }} onClick={load}>Refresh</button>
         {selected.size > 0 && (
           <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
@@ -1278,7 +1338,12 @@ function ApprovalsView({ store }) {
           </span>
         )}
       </div>
-      {approvals.map((appr) => (
+      {visibleApprovals.length === 0 && q && (
+        <div className="dim" style={{ fontSize: 12, padding: "16px 0" }}>
+          No pending approvals match <code>{filterText}</code>.
+        </div>
+      )}
+      {visibleApprovals.map((appr) => (
         <div key={appr.id} style={{
           background: "var(--surface)", border: "1px solid var(--border)",
           borderRadius: "var(--radius)", padding: "12px 16px", marginBottom: 8,

@@ -77,6 +77,13 @@ final class RetentionService {
 		$snapshots_deleted = (int) $wpdb->rows_affected;
 		// phpcs:enable
 
+		// Pin the last-prune state so the admin dashboard shows when the
+		// retention cron last ran and how much it cleared. Without this the
+		// `/retention` endpoint reports "never" forever, which the widget
+		// then renders verbatim.
+		update_option( 'abilityguard_last_pruned', current_time( 'mysql', true ), false );
+		update_option( 'abilityguard_last_pruned_count', $logs_deleted + $snapshots_deleted, false );
+
 		return array(
 			'logs_deleted'      => $logs_deleted,
 			'snapshots_deleted' => $snapshots_deleted,
