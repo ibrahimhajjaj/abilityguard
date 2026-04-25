@@ -22,7 +22,7 @@ namespace AbilityGuard;
 final class Installer {
 
 	public const DB_VERSION_OPTION = 'abilityguard_db_version';
-	public const DB_VERSION        = '1';
+	public const DB_VERSION        = '2';
 
 	/**
 	 * Activation hook.
@@ -102,6 +102,7 @@ final class Installer {
 			invocation_id char(36) NOT NULL,
 			surfaces_json longblob NOT NULL,
 			pre_hash char(64) NOT NULL,
+			post_state_json longblob NULL,
 			created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY  (id),
 			UNIQUE KEY invocation_id (invocation_id),

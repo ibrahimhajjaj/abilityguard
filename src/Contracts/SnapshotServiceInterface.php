@@ -24,4 +24,13 @@ interface SnapshotServiceInterface {
 	 * @return array{ pre_hash: string, snapshot_id: int|null, surfaces: array<string, mixed> }
 	 */
 	public function capture( string $invocation_id, array $safety, $input ): array;
+
+	/**
+	 * Capture post-invocation state and persist it on an existing snapshot row.
+	 *
+	 * @param int                  $snapshot_id Row id returned by capture().
+	 * @param array<string, mixed> $safety      Safety config (same value passed to capture()).
+	 * @param mixed                $input       Ability input.
+	 */
+	public function capture_post( int $snapshot_id, array $safety, $input ): void;
 }

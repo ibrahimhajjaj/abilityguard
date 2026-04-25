@@ -76,6 +76,10 @@ final class AbilityWrapper {
 			}
 			$duration_ms = (int) ( ( hrtime( true ) - $start ) / 1_000_000 );
 
+			if ( 'ok' === $status && null !== $snapshot['snapshot_id'] ) {
+				$this->snapshots->capture_post( $snapshot['snapshot_id'], $this->safety, $input );
+			}
+
 			$this->audit->log(
 				array(
 					'invocation_id' => $invocation_id,

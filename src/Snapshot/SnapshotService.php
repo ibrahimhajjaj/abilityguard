@@ -91,6 +91,37 @@ final class SnapshotService implements SnapshotServiceInterface {
 	}
 
 	/**
+	 * Capture post-invocation state and persist it on an existing snapshot row.
+	 *
+	 * Re-runs the same collectors used during capture() so the post-state
+	 * covers identical surfaces. No-ops when the spec resolves to empty
+	 * (no snapshot configured) or when $snapshot_id is 0.
+	 *
+	 * @param int                  $snapshot_id Row id returned by capture().
+	 * @param array<string, mixed> $safety      Safety config (same value passed to capture()).
+	 * @param mixed                $input       Ability input.
+	 */
+	public function capture_post( int $snapshot_id, array $safety, $input ): void {
+		if ( 0 === $snapshot_id ) {
+			return;
+		}
+		$spec = $this->resolve_spec( $safety, $input );
+		if ( array() === $spec ) {
+			return;
+		}
+
+		$surfaces = array();
+		foreach ( $spec as $surface => $surface_spec ) {
+			if ( ! isset( $this->collectors[ $surface ] ) ) {
+				continue;
+			}
+			$surfaces[ $surface ] = $this->collectors[ $surface ]->collect( $surface_spec );
+		}
+
+		$this->store->update_post_state( $snapshot_id, $surfaces );
+	}
+
+	/**
 	 * Resolve safety.snapshot into a concrete spec array.
 	 *
 	 * @param array<string, mixed> $safety Safety config.
