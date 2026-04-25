@@ -116,27 +116,28 @@ Until that filter exists, add the guard inside your own plugin that calls `Appro
 
 ## Integrating with Slack or email
 
-**The `abilityguard_approval_requested` action does not exist yet.** A hook fired when an approval is queued is planned for v0.5.
-
-In the interim, hook `wp_insert_post` if you store approvals as posts (not applicable here), or poll `wp abilityguard approval list --status=pending --format=json` via a cron and dispatch notifications yourself:
-
-```bash
-# Example: run every 5 minutes via server cron
-wp abilityguard approval list --status=pending --format=json \
-  | jq '.[] | select(.created_at > "2026-01-01")' \
-  | your-notification-script
-```
-
-When v0.5 ships `abilityguard_approval_requested`, the intended recipe will look like:
+`abilityguard_approval_requested` fires synchronously when a new approval row is recorded (v0.5+). Hook it to send Slack messages, emails, or webhooks to your approvers.
 
 ```php
-// FUTURE - v0.5
 add_action(
     'abilityguard_approval_requested',
-    function ( int $approval_id, string $ability_name, int $requested_by ): void {
-        // send Slack message, email, etc.
+    function ( int $approval_id, string $ability_name, int $log_id, mixed $input, string $invocation_id ): void {
+        // Example: post to Slack
+        wp_remote_post( 'https://hooks.slack.com/services/...', [
+            'body' => wp_json_encode( [
+                'text' => "Approval needed: {$ability_name} (#{$approval_id})",
+                'blocks' => [
+                    [ 'type' => 'section', 'text' => [
+                        'type' => 'mrkdwn',
+                        'text' => "*Ability:* `{$ability_name}`\n*Invocation:* `{$invocation_id}`\n<{$site_url}/wp-admin/tools.php?page=abilityguard&approval={$approval_id}|Review →>",
+                    ] ],
+                ],
+            ] ),
+        ] );
     },
     10,
-    3
+    5
 );
 ```
+
+The action fires AFTER the approval row is persisted, so the `$approval_id` is guaranteed valid. The hook runs in the same request as the original ability invocation - keep handlers fast (queue heavy work via wp-cron if needed).

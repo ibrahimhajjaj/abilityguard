@@ -101,7 +101,24 @@ final class ApprovalService {
 		if ( ! $ok ) {
 			return 0;
 		}
-		return (int) $wpdb->insert_id;
+		$approval_id = (int) $wpdb->insert_id;
+
+		/**
+		 * Fires when a new approval request is recorded.
+		 *
+		 * Hook this to send Slack/email/webhook notifications to approvers.
+		 *
+		 * @since 0.5.0
+		 *
+		 * @param int    $approval_id   Newly inserted approval row id.
+		 * @param string $ability_name  Registered ability name.
+		 * @param int    $log_id        Audit log row id for the pending invocation.
+		 * @param mixed  $input         Original input the requester passed to the ability.
+		 * @param string $invocation_id UUID for this invocation.
+		 */
+		do_action( 'abilityguard_approval_requested', $approval_id, $ability_name, $log_id, $input, $invocation_id );
+
+		return $approval_id;
 	}
 
 	/**
