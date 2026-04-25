@@ -30,6 +30,7 @@ final class Installer {
 	public static function activate(): void {
 		self::install();
 		( new Retention\Scheduler() )->schedule();
+		Approval\CapabilityManager::grant_to_administrators();
 	}
 
 	/**

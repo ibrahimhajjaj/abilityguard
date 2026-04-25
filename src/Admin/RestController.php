@@ -9,6 +9,8 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Admin;
 
+use AbilityGuard\Approval\ApprovalService;
+use AbilityGuard\Approval\CapabilityManager;
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Rollback\BulkRollbackService;
 use AbilityGuard\Rollback\RollbackService;
@@ -23,9 +25,9 @@ use WP_REST_Server;
  *  - GET  /abilityguard/v1/log
  *  - GET  /abilityguard/v1/log/<id>
  *  - POST /abilityguard/v1/rollback/<id>
- *  - POST /abilityguard/v1/rollback/bulk
- *
- * All gated by manage_options.
+ *  - POST /abilityguard/v1/rollback/bulk           (manage_options)
+ *  - POST /abilityguard/v1/approval/<id>/approve   (manage_abilityguard_approvals)
+ *  - POST /abilityguard/v1/approval/<id>/reject    (manage_abilityguard_approvals)
  */
 final class RestController {
 
@@ -114,13 +116,40 @@ final class RestController {
 				),
 			)
 		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/approval/(?P<id>\d+)/approve',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'permission_callback' => array( __CLASS__, 'check_approval_perms' ),
+				'callback'            => array( __CLASS__, 'do_approve' ),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/approval/(?P<id>\d+)/reject',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'permission_callback' => array( __CLASS__, 'check_approval_perms' ),
+				'callback'            => array( __CLASS__, 'do_reject' ),
+			)
+		);
 	}
 
 	/**
-	 * Capability gate.
+	 * Capability gate for general (read/rollback) endpoints.
 	 */
 	public static function check_perms(): bool {
 		return current_user_can( AdminMenu::CAPABILITY );
+	}
+
+	/**
+	 * Capability gate for approval decision endpoints.
+	 */
+	public static function check_approval_perms(): bool {
+		return current_user_can( CapabilityManager::CAP );
 	}
 
 	/**
@@ -228,5 +257,57 @@ final class RestController {
 		$summary = $service->rollback_many( $ids, $force );
 
 		return new WP_REST_Response( $summary, 200 );
+	}
+
+	/**
+	 * POST /approval/<id>/approve - approve a pending request.
+	 *
+	 * @param \WP_REST_Request $req Request.
+	 */
+	public static function do_approve( WP_REST_Request $req ): WP_REST_Response|WP_Error {
+		$id      = (int) $req->get_param( 'id' );
+		$user_id = get_current_user_id();
+		$service = new ApprovalService();
+		$result  = $service->approve( $id, $user_id );
+
+		if ( is_wp_error( $result ) ) {
+			$code   = $result->get_error_code();
+			$status = 'abilityguard_not_found' === $code ? 404 : 400;
+			return new WP_Error( $code, $result->get_error_message(), array( 'status' => $status ) );
+		}
+
+		return new WP_REST_Response(
+			array(
+				'ok'          => true,
+				'approval_id' => $id,
+			),
+			200
+		);
+	}
+
+	/**
+	 * POST /approval/<id>/reject - reject a pending request.
+	 *
+	 * @param \WP_REST_Request $req Request.
+	 */
+	public static function do_reject( WP_REST_Request $req ): WP_REST_Response|WP_Error {
+		$id      = (int) $req->get_param( 'id' );
+		$user_id = get_current_user_id();
+		$service = new ApprovalService();
+		$result  = $service->reject( $id, $user_id );
+
+		if ( is_wp_error( $result ) ) {
+			$code   = $result->get_error_code();
+			$status = 'abilityguard_not_found' === $code ? 404 : 400;
+			return new WP_Error( $code, $result->get_error_message(), array( 'status' => $status ) );
+		}
+
+		return new WP_REST_Response(
+			array(
+				'ok'          => true,
+				'approval_id' => $id,
+			),
+			200
+		);
 	}
 }

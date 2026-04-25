@@ -31,10 +31,10 @@ final class RollbackDriftTest extends WP_UnitTestCase {
 	/**
 	 * Create a snapshot and a matching audit log row.
 	 *
-	 * @param string               $inv_id                    Invocation uuid.
-	 * @param array<string, mixed> $spec                      Snapshot spec (e.g. ['post_meta' => [...]]).
-	 * @param string               $ability                   Ability name.
-	 * @param callable|null        $mutate_during_invocation  Closure run between capture and capture_post.
+	 * @param string               $inv_id                   Invocation uuid.
+	 * @param array<string, mixed> $spec                     Snapshot spec (e.g. ['post_meta' => [...]]).
+	 * @param string               $ability                  Ability name.
+	 * @param callable|null        $mutate_during_invocation Closure run between capture and capture_post.
 	 *
 	 * @return array{ log_id: int, snapshot_id: int, pre_hash: string }
 	 */

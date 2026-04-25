@@ -107,15 +107,43 @@ final class ApprovalService {
 	/**
 	 * Approve a pending request: run the original callback and mark approved.
 	 *
+	 * Guards (in order):
+	 *  1. Capability: $user_id must have `manage_abilityguard_approvals`.
+	 *  2. Self-approval: $user_id must differ from the original requester.
+	 *  3. Filter `abilityguard_can_approve`: site owners may veto with custom logic.
+	 *
 	 * @param int $approval_id Approval row id.
 	 * @param int $user_id     User making the decision.
 	 *
-	 * @return bool|WP_Error
+	 * @return true|WP_Error
 	 */
 	public function approve( int $approval_id, int $user_id ): bool|WP_Error {
+		if ( ! user_can( $user_id, CapabilityManager::CAP ) ) {
+			return new WP_Error(
+				'abilityguard_approve_capability_missing',
+				sprintf( 'User %d does not have the %s capability.', $user_id, CapabilityManager::CAP )
+			);
+		}
+
 		$row = $this->repo->find( $approval_id );
 		if ( null === $row ) {
 			return new WP_Error( 'abilityguard_not_found', 'Approval row not found.' );
+		}
+
+		if ( $user_id === (int) $row['requested_by'] ) {
+			return new WP_Error(
+				'abilityguard_approve_self_forbidden',
+				'Approvers cannot approve their own requests.'
+			);
+		}
+
+		// @phpstan-var bool $can
+		$can = apply_filters( 'abilityguard_can_approve', true, $row, $user_id );
+		if ( ! $can ) {
+			return new WP_Error(
+				'abilityguard_approve_denied',
+				'Approval was denied by the abilityguard_can_approve filter.'
+			);
 		}
 
 		if ( 'pending' !== $row['status'] ) {
@@ -175,15 +203,40 @@ final class ApprovalService {
 	/**
 	 * Reject a pending approval request.
 	 *
+	 * Applies the same three guards as approve(): capability, self-reject, filter.
+	 *
 	 * @param int $approval_id Approval row id.
 	 * @param int $user_id     User making the decision.
 	 *
-	 * @return bool|WP_Error
+	 * @return true|WP_Error
 	 */
 	public function reject( int $approval_id, int $user_id ): bool|WP_Error {
+		if ( ! user_can( $user_id, CapabilityManager::CAP ) ) {
+			return new WP_Error(
+				'abilityguard_approve_capability_missing',
+				sprintf( 'User %d does not have the %s capability.', $user_id, CapabilityManager::CAP )
+			);
+		}
+
 		$row = $this->repo->find( $approval_id );
 		if ( null === $row ) {
 			return new WP_Error( 'abilityguard_not_found', 'Approval row not found.' );
+		}
+
+		if ( $user_id === (int) $row['requested_by'] ) {
+			return new WP_Error(
+				'abilityguard_approve_self_forbidden',
+				'Approvers cannot approve their own requests.'
+			);
+		}
+
+		// @phpstan-var bool $can
+		$can = apply_filters( 'abilityguard_can_approve', true, $row, $user_id );
+		if ( ! $can ) {
+			return new WP_Error(
+				'abilityguard_approve_denied',
+				'Approval was denied by the abilityguard_can_approve filter.'
+			);
 		}
 
 		if ( 'pending' !== $row['status'] ) {
