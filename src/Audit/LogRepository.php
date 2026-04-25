@@ -101,6 +101,31 @@ class LogRepository {
 	}
 
 	/**
+	 * Find direct children of a parent invocation.
+	 *
+	 * @param string $parent_invocation_id UUID of the parent invocation.
+	 *
+	 * @return array<int, array<string, mixed>>
+	 */
+	public function find_children( string $parent_invocation_id ): array {
+		if ( '' === $parent_invocation_id ) {
+			return array();
+		}
+		global $wpdb;
+		$table = Installer::table( 'log' );
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$table} WHERE parent_invocation_id = %s ORDER BY id ASC",
+				$parent_invocation_id
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		return is_array( $rows ) ? $rows : array();
+	}
+
+	/**
 	 * Update the status field on a row.
 	 *
 	 * @param int    $id     Log id.

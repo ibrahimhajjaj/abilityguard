@@ -12,6 +12,7 @@ namespace AbilityGuard\Admin;
 use AbilityGuard\Approval\ApprovalRepository;
 use AbilityGuard\Approval\ApprovalService;
 use AbilityGuard\Approval\CapabilityManager;
+use AbilityGuard\Audit\LogMeta;
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Retention\RetentionService;
 use AbilityGuard\Rollback\BulkRollbackService;
@@ -228,10 +229,37 @@ final class RestController {
 		if ( ! empty( $row['invocation_id'] ) ) {
 			$snapshot = ( new SnapshotStore() )->find_by_invocation_id( (string) $row['invocation_id'] );
 		}
+
+		// Parent (if any) - looked up by the parent's invocation_id.
+		$parent = null;
+		if ( ! empty( $row['parent_invocation_id'] ) ) {
+			$parent = $repo->find_by_invocation_id( (string) $row['parent_invocation_id'] );
+		}
+
+		// Children - invocations that reported THIS row's invocation_id as their parent.
+		$children = ! empty( $row['invocation_id'] )
+			? $repo->find_children( (string) $row['invocation_id'] )
+			: array();
+
+		// Selected log_meta surfaces. Anything stored as JSON is decoded so
+		// the React side doesn't have to re-parse.
+		$meta = array();
+		foreach ( array( 'skip_drift_check', 'files_changed_on_rollback', 'files_deleted_on_rollback' ) as $key ) {
+			$values = LogMeta::get_all( $id, $key );
+			if ( array() === $values ) {
+				continue;
+			}
+			$decoded      = json_decode( (string) $values[0], true );
+			$meta[ $key ] = is_array( $decoded ) ? $decoded : $values[0];
+		}
+
 		return new WP_REST_Response(
 			array(
 				'log'      => $row,
 				'snapshot' => $snapshot,
+				'parent'   => $parent,
+				'children' => $children,
+				'meta'     => $meta,
 			),
 			200
 		);

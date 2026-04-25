@@ -92,23 +92,19 @@ final class FilesCollector implements CollectorInterface {
 		'/node_modules/',
 	);
 
-	/**
-	 * Default critical-path matchers. Paths ending in any of these get hashed
-	 * under STRATEGY_CRITICAL_HASH.
-	 *
-	 * @var string[]
-	 */
-	private const DEFAULT_CRITICAL_SUFFIXES = array(
-		'/wp-config.php',
-		'/.env',
-		'/.htaccess',
-	);
+	// Default critical suffixes now live on CriticalFileRegistry::all().
 
 	/**
 	 * Read current state of the given file paths.
 	 *
+	 * `paths` may be a string[] OR any Traversable yielding strings -
+	 * generators are accepted so callers with very large path universes
+	 * (50k+ files) can stream rather than materialise the whole list in
+	 * memory before the collector sees it.
+	 *
 	 * @param mixed $spec string[] of absolute paths OR an array with keys
 	 *                    `paths`, optional `strategy`, optional `exclude_dirs`.
+	 *                    `paths` may also be a Traversable.
 	 *
 	 * @return array<string, array{exists: bool, sha256: ?string, size: ?int, mtime: ?int}>
 	 */
@@ -175,10 +171,17 @@ final class FilesCollector implements CollectorInterface {
 	 * and fires `abilityguard_files_changed_since_snapshot` with the
 	 * paths whose state has changed.
 	 *
+	 * Deletions (captured.exists=true && current.exists=false) are also
+	 * fired as a distinct signal via `abilityguard_files_deleted_since_snapshot`
+	 * so listeners that care specifically about disappearance (security
+	 * monitors, restore prompts) can react without re-deriving it from a
+	 * generic change list.
+	 *
 	 * @param array<mixed> $captured See collect() output.
 	 */
 	public function restore( array $captured ): void {
 		$changed_paths = array();
+		$deleted_paths = array();
 
 		foreach ( $captured as $path => $state ) {
 			$path = (string) $path;
@@ -195,33 +198,54 @@ final class FilesCollector implements CollectorInterface {
 
 			if ( $this->state_differs( $state, $current[ $path ] ) ) {
 				$changed_paths[] = $path;
+
+				// Deletion-specific: was present at snapshot, gone now.
+				$cap_exists = ! empty( $state['exists'] );
+				$cur_exists = ! empty( $current[ $path ]['exists'] );
+				if ( $cap_exists && ! $cur_exists ) {
+					$deleted_paths[] = $path;
+				}
 			}
 		}
 
 		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.DynamicHooknameFound
 		do_action( 'abilityguard_files_changed_since_snapshot', $changed_paths );
+
+		if ( array() !== $deleted_paths ) {
+			// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.DynamicHooknameFound
+			do_action( 'abilityguard_files_deleted_since_snapshot', $deleted_paths );
+		}
 	}
 
 	/**
 	 * Resolve raw spec input into a normalised tuple.
 	 *
+	 * Returns `paths` as an iterable so generator-based specs aren't
+	 * materialised before the collector loop runs.
+	 *
 	 * @param mixed $spec Spec input.
 	 *
-	 * @return array{0: string[], 1: string, 2: string[]} Paths, strategy, exclude_dirs.
+	 * @return array{0: iterable<int|string, string>, 1: string, 2: string[]} Paths, strategy, exclude_dirs.
 	 */
 	private function resolve_spec( $spec ): array {
 		$paths        = array();
 		$strategy     = $this->default_strategy();
 		$exclude_dirs = $this->default_exclude_dirs();
 
-		if ( is_array( $spec ) && isset( $spec['paths'] ) && is_array( $spec['paths'] ) ) {
-			$paths = $spec['paths'];
+		if ( is_array( $spec ) && isset( $spec['paths'] ) ) {
+			$candidate = $spec['paths'];
+			if ( is_array( $candidate ) || $candidate instanceof \Traversable ) {
+				$paths = $candidate;
+			}
 			if ( isset( $spec['strategy'] ) && is_string( $spec['strategy'] ) ) {
 				$strategy = $this->validate_strategy( $spec['strategy'], $strategy );
 			}
 			if ( isset( $spec['exclude_dirs'] ) && is_array( $spec['exclude_dirs'] ) ) {
 				$exclude_dirs = array_merge( $exclude_dirs, $spec['exclude_dirs'] );
 			}
+		} elseif ( $spec instanceof \Traversable ) {
+			// Legacy-style flat input but as a generator.
+			$paths = $spec;
 		} elseif ( is_array( $spec ) ) {
 			// Legacy shape: flat list of paths.
 			$paths = $spec;
@@ -293,10 +317,14 @@ final class FilesCollector implements CollectorInterface {
 	/**
 	 * Whether a path is "critical" - content-equality matters more than mtime.
 	 *
+	 * Source of truth is CriticalFileRegistry. The legacy
+	 * `abilityguard_files_critical_suffixes` filter still wins so existing
+	 * code keeps working; the registry merely seeds defaults.
+	 *
 	 * @param string $path Absolute path.
 	 */
 	private function is_critical( string $path ): bool {
-		$suffixes = self::DEFAULT_CRITICAL_SUFFIXES;
+		$suffixes = CriticalFileRegistry::all();
 
 		if ( function_exists( 'apply_filters' ) ) {
 			$filtered = apply_filters( 'abilityguard_files_critical_suffixes', $suffixes );

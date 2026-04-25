@@ -163,8 +163,8 @@ final class RollbackService {
 		// FilesCollector doesn't actually rewrite files; it only fires this
 		// action with paths whose live state diverged from the snapshot. We
 		// pin those onto the log row so the audit trail reflects the drift.
-		$log_id_for_meta   = (int) ( $log['id'] ?? 0 );
-		$files_listener_fn = static function ( array $changed_paths ) use ( $log_id_for_meta ): void {
+		$log_id_for_meta     = (int) ( $log['id'] ?? 0 );
+		$files_listener_fn   = static function ( array $changed_paths ) use ( $log_id_for_meta ): void {
 			if ( $log_id_for_meta <= 0 || array() === $changed_paths ) {
 				return;
 			}
@@ -174,7 +174,18 @@ final class RollbackService {
 				(string) wp_json_encode( array_values( $changed_paths ) )
 			);
 		};
+		$deleted_listener_fn = static function ( array $deleted_paths ) use ( $log_id_for_meta ): void {
+			if ( $log_id_for_meta <= 0 || array() === $deleted_paths ) {
+				return;
+			}
+			LogMeta::set(
+				$log_id_for_meta,
+				'files_deleted_on_rollback',
+				(string) wp_json_encode( array_values( $deleted_paths ) )
+			);
+		};
 		add_action( 'abilityguard_files_changed_since_snapshot', $files_listener_fn );
+		add_action( 'abilityguard_files_deleted_since_snapshot', $deleted_listener_fn );
 
 		$skipped = array(); // Keys not restored due to failed decryption or v0.3 sentinel.
 		foreach ( $snapshot['surfaces'] as $surface => $captured ) {
@@ -206,6 +217,7 @@ final class RollbackService {
 		}
 
 		remove_action( 'abilityguard_files_changed_since_snapshot', $files_listener_fn );
+		remove_action( 'abilityguard_files_deleted_since_snapshot', $deleted_listener_fn );
 
 		if ( array() !== $skipped && ! $force ) {
 			return new WP_Error(

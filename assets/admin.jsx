@@ -1258,19 +1258,28 @@ function WalkedView({ val, depth }) {
 
 /* ---- Real-data hooks + helpers ---- */
 function useDetail(id) {
-  const [state, setState] = React.useState({ loading: true, error: null, log: null, snapshot: null });
+  const initial = { loading: true, error: null, log: null, snapshot: null, parent: null, children: [], meta: {} };
+  const [state, setState] = React.useState(initial);
   React.useEffect(() => {
     if (!id) return;
     let cancelled = false;
-    setState({ loading: true, error: null, log: null, snapshot: null });
+    setState(initial);
     fetch(restUrl(`log/${id}`), { headers: { "X-WP-Nonce": BOOT.rest.nonce } })
       .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
       .then(({ ok, body }) => {
         if (cancelled) return;
-        if (!ok) setState({ loading: false, error: body?.message || "Failed to load", log: null, snapshot: null });
-        else setState({ loading: false, error: null, log: body.log, snapshot: body.snapshot });
+        if (!ok) setState({ ...initial, loading: false, error: body?.message || "Failed to load" });
+        else setState({
+          loading: false,
+          error: null,
+          log: body.log,
+          snapshot: body.snapshot,
+          parent: body.parent || null,
+          children: Array.isArray(body.children) ? body.children : [],
+          meta: body.meta && typeof body.meta === "object" ? body.meta : {},
+        });
       })
-      .catch((e) => { if (!cancelled) setState({ loading: false, error: String(e), log: null, snapshot: null }); });
+      .catch((e) => { if (!cancelled) setState({ ...initial, loading: false, error: String(e) }); });
     return () => { cancelled = true; };
   }, [id]);
   return state;
@@ -1549,9 +1558,15 @@ function DetailScreen({ store }) {
     return () => window.removeEventListener("keydown", handler);
   }, [row, store.modal, canRb, snapshotOpen]);
 
-  const log      = detail.log || {};
-  const snapshot = detail.snapshot;
-  const summary  = summarizeSnapshot(snapshot);
+  const log       = detail.log || {};
+  const snapshot  = detail.snapshot;
+  const summary   = summarizeSnapshot(snapshot);
+  const parent    = detail.parent || null;
+  const children  = detail.children || [];
+  const meta      = detail.meta || {};
+  const filesChanged = Array.isArray(meta.files_changed_on_rollback) ? meta.files_changed_on_rollback : [];
+  const filesDeleted = Array.isArray(meta.files_deleted_on_rollback) ? meta.files_deleted_on_rollback : [];
+  const skipDrift    = !!meta.skip_drift_check;
   const preHash  = log.pre_hash || row.pre_hash || "";
   const postHash = log.post_hash || row.post_hash || "";
   const callerLabel = row.caller_id ? `${row.caller} · ${row.caller_id}` : row.caller;
@@ -1631,6 +1646,86 @@ function DetailScreen({ store }) {
               </ul>
             )}
           </section>
+
+          {(parent || children.length > 0) && (
+            <section className="hy-card">
+              <header className="hy-card-head"><h3>Invocation chain</h3></header>
+              <dl className="hy-kv">
+                {parent && (
+                  <>
+                    <dt>Parent</dt>
+                    <dd>
+                      <a
+                        href="#"
+                        className="mono"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          store.setView({ name: "detail", id: Number(parent.id) });
+                        }}
+                        title={parent.invocation_id}
+                      >
+                        #{parent.id} · {parent.ability_name}
+                      </a>
+                    </dd>
+                  </>
+                )}
+                {children.length > 0 && (
+                  <>
+                    <dt>Children</dt>
+                    <dd>
+                      <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "grid", gap: 4 }}>
+                        {children.map((c) => (
+                          <li key={c.id}>
+                            <a
+                              href="#"
+                              className="mono"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                store.setView({ name: "detail", id: Number(c.id) });
+                              }}
+                              title={c.invocation_id}
+                            >
+                              #{c.id} · {c.ability_name}
+                            </a>
+                            <span className="dim" style={{ fontSize: 11, marginLeft: 8 }}>{c.status}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </dd>
+                  </>
+                )}
+              </dl>
+            </section>
+          )}
+
+          {(filesChanged.length > 0 || filesDeleted.length > 0 || skipDrift) && (
+            <section className="hy-card">
+              <header className="hy-card-head"><h3>Rollback signals</h3></header>
+              <div style={{ padding: "8px 16px", fontSize: 12, display: "grid", gap: 8 }}>
+                {skipDrift && (
+                  <div className="dim">
+                    Drift check skipped - <code>safety.skip_drift_check = true</code>.
+                  </div>
+                )}
+                {filesChanged.length > 0 && (
+                  <div>
+                    <strong>Files changed since snapshot:</strong>
+                    <ul className="mono" style={{ margin: "4px 0 0", paddingLeft: 16, fontSize: 11.5, lineHeight: 1.7 }}>
+                      {filesChanged.map((p, i) => <li key={i}>{p}</li>)}
+                    </ul>
+                  </div>
+                )}
+                {filesDeleted.length > 0 && (
+                  <div>
+                    <strong style={{ color: "var(--err-fg)" }}>Files deleted since snapshot:</strong>
+                    <ul className="mono" style={{ margin: "4px 0 0", paddingLeft: 16, fontSize: 11.5, lineHeight: 1.7 }}>
+                      {filesDeleted.map((p, i) => <li key={i}>{p}</li>)}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
 
           <section className="hy-card hy-span-2">
             <header className="hy-card-head">

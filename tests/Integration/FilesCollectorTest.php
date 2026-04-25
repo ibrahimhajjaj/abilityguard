@@ -5,6 +5,7 @@ declare( strict_types=1 );
 namespace AbilityGuard\Tests\Integration;
 
 use AbilityGuard\Installer;
+use AbilityGuard\Snapshot\Collector\CriticalFileRegistry;
 use AbilityGuard\Snapshot\Collector\FilesCollector;
 use AbilityGuard\Snapshot\SnapshotService;
 use AbilityGuard\Snapshot\SnapshotStore;
@@ -212,6 +213,85 @@ final class FilesCollectorTest extends WP_UnitTestCase {
 
 		$this->assertArrayHasKey( $path, $captured, 'flat string[] spec must still be accepted' );
 		$this->assertNotNull( $captured[ $path ]['sha256'], 'legacy flat spec defaults to full_hash strategy' );
+	}
+
+	public function test_critical_file_registry_extends_default_set(): void {
+		$normal_path = $this->tmp_file( 'plain' );
+		$weird_path  = sys_get_temp_dir() . '/ag_critical_registry_test/secret.token';
+		wp_mkdir_p( dirname( $weird_path ) );
+		file_put_contents( $weird_path, 'super-secret' );
+		$this->tmp_files[] = $weird_path;
+
+		CriticalFileRegistry::add( '/secret.token' );
+
+		try {
+			$col      = new FilesCollector();
+			$captured = $col->collect(
+				array(
+					'paths'    => array( $normal_path, $weird_path ),
+					'strategy' => FilesCollector::STRATEGY_CRITICAL_HASH,
+				)
+			);
+
+			$this->assertNull( $captured[ $normal_path ]['sha256'], 'non-critical path stays unhashed' );
+			$this->assertNotNull(
+				$captured[ $weird_path ]['sha256'],
+				'registered suffix promotes path to critical, must be hashed'
+			);
+		} finally {
+			CriticalFileRegistry::reset();
+		}
+	}
+
+	public function test_deletion_fires_separate_action(): void {
+		$path = $this->tmp_file( 'will be deleted' );
+		$col  = new FilesCollector();
+
+		$captured = $col->collect( array( $path ) );
+
+		// Remove the file so the deletion-specific action should fire.
+		unlink( $path );
+		$this->tmp_files = array_values( array_diff( $this->tmp_files, array( $path ) ) );
+
+		$changed = array();
+		$deleted = array();
+		add_action(
+			'abilityguard_files_changed_since_snapshot',
+			static function ( array $paths ) use ( &$changed ): void {
+				$changed = $paths;
+			}
+		);
+		add_action(
+			'abilityguard_files_deleted_since_snapshot',
+			static function ( array $paths ) use ( &$deleted ): void {
+				$deleted = $paths;
+			}
+		);
+
+		$col->restore( $captured );
+
+		$this->assertContains( $path, $changed, 'deleted file must appear in generic change list' );
+		$this->assertContains( $path, $deleted, 'deleted file must appear in deletion-specific list' );
+	}
+
+	public function test_collect_accepts_generator_paths(): void {
+		$a = $this->tmp_file( 'gen-a' );
+		$b = $this->tmp_file( 'gen-b' );
+
+		$gen = static function () use ( $a, $b ) {
+			yield $a;
+			yield $b;
+		};
+
+		$col      = new FilesCollector();
+		$captured = $col->collect(
+			array(
+				'paths' => $gen(),
+			)
+		);
+
+		$this->assertArrayHasKey( $a, $captured );
+		$this->assertArrayHasKey( $b, $captured );
 	}
 
 	public function test_defaults_wiring_persists_files_surface(): void {
