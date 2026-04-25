@@ -2,27 +2,9 @@
 
 AbilityGuard intercepts any ability whose registration includes a `safety` key. You declare what state your ability touches; the library handles snapshot, audit, and rollback.
 
-## 30-second TL;DR
-
-```php
-wp_register_ability( 'my-plugin/do-something', array(
-    // ... core ability keys ...
-    'safety' => array(
-        'destructive' => true,
-        'snapshot'    => array(
-            'options' => array( 'my_plugin_setting' ),
-        ),
-    ),
-) );
-```
-
-That is the minimum. AbilityGuard will capture `my_plugin_setting` before execution, record a diff after, and make the invocation rollback-eligible.
-
----
-
 ## Prerequisite: register a category before your abilities
 
-The Abilities API requires every ability to belong to a registered category. If the category in your `safety`-bearing registration doesn't exist yet, the registration fails silently - `wp_get_ability( 'my-plugin/x' )` returns `null` with a `_doing_it_wrong` notice in the debug log.
+> **Read this before copying any of the snippets below.** The Abilities API requires every ability to belong to a registered category. If the category in your `safety`-bearing registration doesn't exist yet, the registration fails silently - `wp_get_ability( 'my-plugin/x' )` returns `null`, the wrapper never runs, and you get a `_doing_it_wrong` notice in the debug log instead of a snapshot.
 
 Register your category once, on `wp_abilities_api_categories_init`, before any `wp_register_ability()` call:
 
@@ -36,6 +18,26 @@ add_action( 'wp_abilities_api_categories_init', static function ( $registry ): v
 ```
 
 Then use that category slug in every ability's `category` field. You can put both action callbacks (categories + abilities) in the same plugin file - order doesn't matter, but the category must be REGISTERED on its action before any ability that uses it.
+
+---
+
+## 30-second TL;DR
+
+```php
+// (Assumes you've registered the 'my-plugin' category - see above.)
+wp_register_ability( 'my-plugin/do-something', array(
+    'category'    => 'my-plugin',
+    // ... other core ability keys ...
+    'safety' => array(
+        'destructive' => true,
+        'snapshot'    => array(
+            'options' => array( 'my_plugin_setting' ),
+        ),
+    ),
+) );
+```
+
+That is the minimum. AbilityGuard will capture `my_plugin_setting` before execution, record a diff after, and make the invocation rollback-eligible.
 
 ---
 

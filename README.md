@@ -10,6 +10,8 @@ A developer library for plugin authors who register abilities via `wp_register_a
 
 Declare what state your ability touches; AbilityGuard handles the safety wrapper.
 
+> **Heads up:** the Abilities API requires the ability's `category` to already be registered on `wp_abilities_api_categories_init`, otherwise the registration silently no-ops. See [docs/safety-config.md > Prerequisite](docs/safety-config.md#prerequisite-register-a-category-before-your-abilities) for the one-liner.
+
 ```php
 wp_register_ability( 'my-plugin/update-product-price', array(
     'label'               => 'Update product price',
