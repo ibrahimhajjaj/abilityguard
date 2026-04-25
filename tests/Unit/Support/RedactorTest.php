@@ -222,6 +222,7 @@ final class RedactorTest extends TestCase {
 	public function test_transform_not_invoked_on_non_matching_keys(): void {
 		$call_count = 0;
 		$transform  = static function ( mixed $v ) use ( &$call_count ): string {
+			unset( $v );
 			++$call_count;
 			return 'ENCRYPTED';
 		};

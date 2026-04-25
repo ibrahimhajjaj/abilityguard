@@ -137,11 +137,15 @@ add_action(
 
 ---
 
-## WhatsApp (Cloud API)
+## WhatsApp
 
-WhatsApp is the dominant notification channel in much of the world (MENA, India, Latin America). Use Meta's official **Cloud API** - HTTP-only, no Baileys session, free for the first 1,000 service conversations per month.
+WhatsApp is the dominant notification channel in much of the world (MENA, India, Latin America). Two paths, both legitimate for public use - pick based on your infrastructure.
 
-Set up a Meta Business account, register a phone number, get a permanent access token + phone number id from <https://developers.facebook.com/apps>. Then create a [message template](https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates) named `abilityguard_approval` with body parameters: `{{ability}}`, `{{invocation}}`, `{{review_url}}`.
+### Option A - Cloud API (Meta, hosted)
+
+Meta's official HTTP API. Free for the first 1,000 service conversations per month. Best when you don't want to manage a WhatsApp session yourself, or you're sending to many recipients.
+
+Setup: Meta Business account → register a phone number → get a permanent access token + phone number id from <https://developers.facebook.com/apps>. Create a [message template](https://developers.facebook.com/docs/whatsapp/business-management-api/message-templates) named `abilityguard_approval` with three body parameters: `{{ability}}`, `{{invocation}}`, `{{review_url}}`.
 
 ```php
 add_action(
@@ -186,9 +190,63 @@ add_action(
 );
 ```
 
-> **Template requirement.** WhatsApp's policy requires pre-approved templates for business-initiated messages outside a 24-hour customer-service window. The recipe above uses a template; for replies inside that window you can send free-form text. See Meta's docs for the policy details.
+**Template policy.** WhatsApp requires pre-approved templates for business-initiated messages outside a 24-hour customer-service window. Free-form messages only work as replies inside that window. See Meta's docs for the full policy.
 
-> **Self-hosted Baileys variant.** If you run a private deployment with a Baileys-based CLI (e.g. [wu-cli](https://github.com/ibrahimhajjaj/wu-cli) - `npm i -g @ibrahimwithi/wu-cli`), you can shell out instead of using the Cloud API. Replace the `wp_remote_post()` block with `shell_exec( 'wu messages send ' . escapeshellarg($phone) . ' ' . escapeshellarg($body) )`. **Don't ship this in a public plugin** - it requires a logged-in WhatsApp session on the server. Personal/internal use only.
+### Option B - Self-hosted via wu-cli (Baileys)
+
+[wu-cli](https://github.com/ibrahimhajjaj/wu-cli) (`npm i -g @ibrahimwithi/wu-cli`) is a Baileys-based CLI that talks to WhatsApp using a logged-in personal/business account on your server. **No Meta Business account, no template approval, no per-message accounting.** Best when you control the server, accept the operational cost of running a WhatsApp session, and want zero external dependencies.
+
+Setup on the server (one time): `npm i -g @ibrahimwithi/wu-cli && wu login` - scan the QR code with your WhatsApp mobile app. The session persists in `~/.wu/`.
+
+Then in your plugin:
+
+```php
+add_action(
+    'abilityguard_approval_requested',
+    function ( int $approval_id, string $ability_name, int $log_id, mixed $input, string $invocation_id ): void {
+        $approver_phones = array( '+201234567890' );
+        $body = sprintf(
+            "*AbilityGuard approval needed*\n\n*Ability:* `%s`\n*Invocation:* `%s`\n\nReview: %s",
+            $ability_name,
+            $invocation_id,
+            abilityguard_approval_url( $approval_id )
+        );
+
+        foreach ( $approver_phones as $phone ) {
+            $cmd = sprintf(
+                'wu messages send %s %s 2>&1',
+                escapeshellarg( $phone ),
+                escapeshellarg( $body )
+            );
+            // Defer to wp_schedule_single_event in production so a slow wu call
+            // doesn't block the original ability invocation; see "Deferred dispatch"
+            // section below.
+            shell_exec( $cmd );
+        }
+    },
+    10,
+    5
+);
+```
+
+**Tradeoffs to know.**
+- Requires PHP's `shell_exec` to be enabled. Many shared hosts disable it; check with your provider.
+- The WhatsApp session is tied to the phone number you logged in with. Treat it as a service account, not your personal phone.
+- Baileys is unofficial. Meta does not formally endorse it. Sessions can occasionally need re-authentication. Production deployments should monitor `wu session status`.
+- For any non-trivial volume, defer the `shell_exec` via `wp_schedule_single_event` - see the "Deferred dispatch" section below.
+
+### Choosing between A and B
+
+| | Cloud API (A) | wu-cli (B) |
+|---|---|---|
+| Setup effort | Meta Business + template approval (hours-days) | `wu login` once (5 min) |
+| Per-message cost | Free up to 1k convs/mo, then per-conversation | $0 |
+| Template constraint | Yes (24h window for free-form) | No, send any text any time |
+| Operational | Hosted by Meta | You run a WhatsApp session on your server |
+| Portability | Works on any host | Requires `shell_exec` and a persistent session |
+| Recommended for | High volume / multiple stakeholders / public SaaS | Self-hosted / single-tenant / no Meta Business |
+
+You can also use both - Cloud API as primary with wu-cli as a fallback when the Cloud API quota is exhausted.
 
 ---
 

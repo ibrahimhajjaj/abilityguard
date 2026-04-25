@@ -88,7 +88,10 @@ final class EncryptedRedactionTest extends WP_UnitTestCase {
 		$row = $this->run_ability(
 			array( 'destructive' => false ),
 			$input,
-			static fn( mixed $ignored ) => array( 'ok' => true )
+			static function ( mixed $ignored ): array {
+				unset( $ignored );
+				return array( 'ok' => true );
+			}
 		);
 
 		$this->assertNotNull( $row['args_json'] );
@@ -200,7 +203,10 @@ final class EncryptedRedactionTest extends WP_UnitTestCase {
 			$row = $this->run_ability(
 				array( 'destructive' => false ),
 				$input,
-				static fn( mixed $ignored ) => true
+				static function ( mixed $ignored ): bool {
+					unset( $ignored );
+					return true;
+				}
 			);
 
 			$this->assertNotNull( $row['args_json'] );

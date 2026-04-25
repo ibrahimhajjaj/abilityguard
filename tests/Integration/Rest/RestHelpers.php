@@ -65,17 +65,17 @@ trait RestHelpers {
 	}
 
 	/**
-	 * Set current user to admin, run $fn, then restore the previous user.
+	 * Set current user to admin, run $callback, then restore the previous user.
 	 *
-	 * @param callable $fn Callback to run as admin.
+	 * @param callable $callback Callback to run as admin.
 	 *
-	 * @return mixed Return value of $fn.
+	 * @return mixed Return value of $callback.
 	 */
-	protected function as_admin( callable $fn ): mixed {
+	protected function as_admin( callable $callback ): mixed {
 		$prev = get_current_user_id();
 		wp_set_current_user( $this->admin_user_id );
 		try {
-			return $fn();
+			return $callback();
 		} finally {
 			wp_set_current_user( $prev );
 		}

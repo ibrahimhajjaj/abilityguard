@@ -398,6 +398,7 @@ final class AbilityWrapper {
 		if ( array_key_exists( 'max_payload_bytes', $safety ) ) {
 			return (int) $safety['max_payload_bytes'];
 		}
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.DynamicHooknameFound -- callers pass `abilityguard_max_args_bytes` or `abilityguard_max_result_bytes`, both prefixed.
 		return (int) apply_filters( $filter_name, $cap_default );
 	}
 

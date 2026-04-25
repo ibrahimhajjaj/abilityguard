@@ -137,6 +137,7 @@ final class PostStateCaptureTest extends WP_UnitTestCase {
 				'category'            => 'abilityguard-tests',
 				'permission_callback' => '__return_true',
 				'execute_callback'    => static function ( $input ): never {
+					unset( $input );
 					throw new \RuntimeException( 'intentional failure' );
 				},
 				'input_schema'        => array(

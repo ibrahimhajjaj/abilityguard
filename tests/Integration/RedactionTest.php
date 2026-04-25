@@ -92,6 +92,7 @@ final class RedactionTest extends WP_UnitTestCase {
 			array( 'destructive' => false ),
 			$input,
 			static function ( mixed $ignored ) {
+				unset( $ignored );
 				return array( 'ok' => true );
 			}
 		);
@@ -127,6 +128,7 @@ final class RedactionTest extends WP_UnitTestCase {
 			),
 			$input,
 			static function ( mixed $ignored ) {
+				unset( $ignored );
 				return true;
 			}
 		);
@@ -152,6 +154,7 @@ final class RedactionTest extends WP_UnitTestCase {
 			),
 			array( 'user' => 'bob' ),
 			static function ( mixed $ignored ) {
+				unset( $ignored );
 				return array(
 					'access_token' => 'eyJhbGciOiJIUzI1NiJ9',
 					'expires_in'   => 3600,
@@ -188,6 +191,7 @@ final class RedactionTest extends WP_UnitTestCase {
 				'password' => 'plain',
 			),
 			static function ( mixed $ignored ) {
+				unset( $ignored );
 				return array( 'token' => 'raw-token' );
 			}
 		);
@@ -209,6 +213,7 @@ final class RedactionTest extends WP_UnitTestCase {
 	 */
 	public function test_global_filter_redacts_custom_key_in_result(): void {
 		$filter_fn = static function ( array $keys, string $unused_kind ): array {
+			unset( $unused_kind );
 			return array_merge( $keys, array( 'special_token' ) );
 		};
 		add_filter( 'abilityguard_redact_keys', $filter_fn, 10, 2 );
@@ -218,6 +223,7 @@ final class RedactionTest extends WP_UnitTestCase {
 				array( 'destructive' => false ),
 				array( 'user' => 'bob' ),
 				static function ( mixed $ignored ) {
+					unset( $ignored );
 					return array(
 						'special_token' => 'ultra-secret',
 						'status'        => 'ok',

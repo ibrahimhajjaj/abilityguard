@@ -12,6 +12,15 @@ use WP_UnitTestCase;
 
 /**
  * Integration tests for FilesCollector against the real filesystem.
+ *
+ * This suite intentionally drives raw PHP filesystem calls (unlink, file_put_contents,
+ * file_get_contents, touch) against tmp fixtures. WP_Filesystem is a network/FTP
+ * abstraction designed for runtime, not for synchronous fixture setup in tests.
+ *
+ * phpcs:disable WordPress.WP.AlternativeFunctions.unlink_unlink
+ * phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+ * phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_touch
+ * phpcs:disable WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
  */
 final class FilesCollectorTest extends WP_UnitTestCase {
 
@@ -116,6 +125,93 @@ final class FilesCollectorTest extends WP_UnitTestCase {
 		$collector->restore( $captured );
 
 		$this->assertFalse( $fired );
+	}
+
+	public function test_strategy_mtime_skips_hashing(): void {
+		$path = $this->tmp_file( 'plain content' );
+		$col  = new FilesCollector();
+
+		$captured = $col->collect(
+			array(
+				'paths'    => array( $path ),
+				'strategy' => FilesCollector::STRATEGY_MTIME,
+			)
+		);
+		$this->assertNull( $captured[ $path ]['sha256'], 'mtime strategy must not compute sha256' );
+		$this->assertNotNull( $captured[ $path ]['mtime'], 'mtime strategy still records mtime' );
+		$this->assertNotNull( $captured[ $path ]['size'], 'mtime strategy still records size' );
+	}
+
+	public function test_strategy_mtime_size_detects_size_change_without_hash(): void {
+		$path = $this->tmp_file( 'short' );
+		$col  = new FilesCollector();
+
+		$captured = $col->collect(
+			array(
+				'paths'    => array( $path ),
+				'strategy' => FilesCollector::STRATEGY_MTIME_SIZE,
+			)
+		);
+
+		// Mutate content (changes size + mtime) and bump mtime so detection
+		// works even on fast filesystems where touches share a second.
+		file_put_contents( $path, 'much longer content here' );
+		touch( $path, time() + 5 );
+
+		$fired = false;
+		add_action(
+			'abilityguard_files_changed_since_snapshot',
+			function ( $changed ) use ( $path, &$fired ): void {
+				if ( in_array( $path, $changed, true ) ) {
+					$fired = true;
+				}
+			}
+		);
+
+		$col->restore( $captured );
+		$this->assertTrue( $fired, 'mtime_size strategy must detect size+mtime change without sha256' );
+	}
+
+	public function test_strategy_critical_hash_only_hashes_critical_paths(): void {
+		$normal_path   = $this->tmp_file( 'normal' );
+		$critical_path = sys_get_temp_dir() . '/ag_critical_test/.htaccess';
+		wp_mkdir_p( dirname( $critical_path ) );
+		file_put_contents( $critical_path, 'AddType text/html .htm' );
+		$this->tmp_files[] = $critical_path;
+
+		$col      = new FilesCollector();
+		$captured = $col->collect(
+			array(
+				'paths'    => array( $normal_path, $critical_path ),
+				'strategy' => FilesCollector::STRATEGY_CRITICAL_HASH,
+			)
+		);
+
+		$this->assertNull( $captured[ $normal_path ]['sha256'], 'non-critical path must not be hashed' );
+		$this->assertNotNull( $captured[ $critical_path ]['sha256'], 'critical (.htaccess) path must be hashed' );
+	}
+
+	public function test_exclude_dirs_filter_drops_matching_paths(): void {
+		$path = $this->tmp_file( 'excluded' );
+		$col  = new FilesCollector();
+
+		$captured = $col->collect(
+			array(
+				'paths'        => array( $path ),
+				'exclude_dirs' => array( basename( $path ) ),
+			)
+		);
+
+		$this->assertArrayNotHasKey( $path, $captured, 'matching exclude_dirs entry must drop the path' );
+	}
+
+	public function test_legacy_flat_path_array_still_works(): void {
+		$path     = $this->tmp_file( 'legacy' );
+		$col      = new FilesCollector();
+		$captured = $col->collect( array( $path ) );
+
+		$this->assertArrayHasKey( $path, $captured, 'flat string[] spec must still be accepted' );
+		$this->assertNotNull( $captured[ $path ]['sha256'], 'legacy flat spec defaults to full_hash strategy' );
 	}
 
 	public function test_defaults_wiring_persists_files_surface(): void {

@@ -264,6 +264,7 @@ final class Command {
 	 * @param array<string, mixed> $assoc_args Flags (unused).
 	 */
 	public static function cmd_prune( array $args, array $assoc_args ): void {
+		unset( $args, $assoc_args );
 		$result = ( new RetentionService() )->prune();
 		WP_CLI::success(
 			sprintf(

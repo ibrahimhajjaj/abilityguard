@@ -87,7 +87,7 @@ final class CipherTest extends TestCase {
 	}
 
 	public function test_tampered_ct_throws(): void {
-		$envelope       = Cipher::encrypt( 'secret' );
+		$envelope = Cipher::encrypt( 'secret' );
 		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode
 		$envelope['ct'] = base64_encode( 'GARBAGE' . random_bytes( 16 ) );
 
