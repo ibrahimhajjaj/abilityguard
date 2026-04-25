@@ -9,6 +9,7 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Rollback;
 
+use AbilityGuard\Audit\LogMeta;
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Installer;
 use AbilityGuard\Snapshot\Collector\CollectorInterface;
@@ -158,6 +159,23 @@ final class RollbackService {
 		}
 
 		// --- Restore (decrypt envelopes; skip v0.3 sentinels) ----------------
+		// Capture file-change surfacing emitted by FilesCollector::restore().
+		// FilesCollector doesn't actually rewrite files; it only fires this
+		// action with paths whose live state diverged from the snapshot. We
+		// pin those onto the log row so the audit trail reflects the drift.
+		$log_id_for_meta   = (int) ( $log['id'] ?? 0 );
+		$files_listener_fn = static function ( array $changed_paths ) use ( $log_id_for_meta ): void {
+			if ( $log_id_for_meta <= 0 || array() === $changed_paths ) {
+				return;
+			}
+			LogMeta::set(
+				$log_id_for_meta,
+				'files_changed_on_rollback',
+				(string) wp_json_encode( array_values( $changed_paths ) )
+			);
+		};
+		add_action( 'abilityguard_files_changed_since_snapshot', $files_listener_fn );
+
 		$skipped = array(); // Keys not restored due to failed decryption or v0.3 sentinel.
 		foreach ( $snapshot['surfaces'] as $surface => $captured ) {
 			if ( ! isset( $this->collectors[ $surface ] ) || ! is_array( $captured ) ) {
@@ -186,6 +204,8 @@ final class RollbackService {
 				$this->collectors[ $surface ]->restore( $restorable );
 			}
 		}
+
+		remove_action( 'abilityguard_files_changed_since_snapshot', $files_listener_fn );
 
 		if ( array() !== $skipped && ! $force ) {
 			return new WP_Error(
@@ -274,8 +294,12 @@ final class RollbackService {
 				// Spec: string[]. Captured: array<string, mixed>.
 				return array_keys( $captured );
 
+			case 'files':
+				// Spec: string[] of absolute paths. Captured keys ARE the paths.
+				return array_keys( $captured );
+
 			default:
-				// For taxonomy, user_role, files: pass captured data as spec.
+				// For taxonomy, user_role: pass captured data as spec.
 				// The collectors can use the captured shape to re-read live state.
 				return $captured;
 		}

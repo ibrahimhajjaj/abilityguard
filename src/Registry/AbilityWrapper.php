@@ -11,6 +11,7 @@ declare( strict_types=1 );
 namespace AbilityGuard\Registry;
 
 use AbilityGuard\Approval\ApprovalService;
+use AbilityGuard\Audit\LogMeta;
 use AbilityGuard\Concurrency\Lock;
 use AbilityGuard\Contracts\AuditLoggerInterface;
 use AbilityGuard\Contracts\SnapshotServiceInterface;
@@ -62,9 +63,10 @@ final class AbilityWrapper {
 	 */
 	public function wrap( callable $original_callback ): callable {
 		return function ( $input = null ) use ( $original_callback ) {
-			$invocation_id     = self::uuid4();
-			$destructive       = (bool) ( $this->safety['destructive'] ?? false );
-			$requires_approval = ! empty( $this->safety['requires_approval'] );
+			$invocation_id        = self::uuid4();
+			$parent_invocation_id = InvocationStack::current();
+			$destructive          = (bool) ( $this->safety['destructive'] ?? false );
+			$requires_approval    = ! empty( $this->safety['requires_approval'] );
 
 			// ---------------------------------------------------------------
 			// Advisory lock: serialise all invocations that share the same
@@ -102,18 +104,19 @@ final class AbilityWrapper {
 
 				$log_id = $this->audit->log(
 					array(
-						'invocation_id' => $invocation_id,
-						'ability_name'  => $this->ability_name,
-						'caller_type'   => self::detect_caller_type(),
-						'user_id'       => self::current_user_id(),
-						'args_json'     => self::encode_or_null( $this->redact_value( $input, 'input' ) ),
-						'result_json'   => null,
-						'status'        => 'pending',
-						'destructive'   => $destructive,
-						'duration_ms'   => 0,
-						'pre_hash'      => $snapshot['pre_hash'],
-						'post_hash'     => null,
-						'snapshot_id'   => $snapshot['snapshot_id'],
+						'invocation_id'        => $invocation_id,
+						'parent_invocation_id' => $parent_invocation_id,
+						'ability_name'         => $this->ability_name,
+						'caller_type'          => self::detect_caller_type(),
+						'user_id'              => self::current_user_id(),
+						'args_json'            => self::encode_or_null( $this->redact_value( $input, 'input' ) ),
+						'result_json'          => null,
+						'status'               => 'pending',
+						'destructive'          => $destructive,
+						'duration_ms'          => 0,
+						'pre_hash'             => $snapshot['pre_hash'],
+						'post_hash'            => null,
+						'snapshot_id'          => $snapshot['snapshot_id'],
 					)
 				);
 
@@ -176,6 +179,7 @@ final class AbilityWrapper {
 				$result = null;
 				$status = 'ok';
 				$thrown = null;
+				InvocationStack::push( $invocation_id );
 				try {
 					$result = $original_callback( $input );
 					if ( is_wp_error( $result ) ) {
@@ -184,6 +188,8 @@ final class AbilityWrapper {
 				} catch ( Throwable $e ) {
 					$status = 'error';
 					$thrown = $e;
+				} finally {
+					InvocationStack::pop();
 				}
 				$duration_ms = (int) ( ( hrtime( true ) - $start ) / 1_000_000 );
 
@@ -229,23 +235,28 @@ final class AbilityWrapper {
 					self::maybe_doing_it_wrong( $this->ability_name );
 				}
 
-				$this->audit->log(
+				$log_id = $this->audit->log(
 					array(
-						'invocation_id' => $invocation_id,
-						'ability_name'  => $this->ability_name,
-						'caller_type'   => $caller_type,
-						'caller_id'     => $mcp_id,
-						'user_id'       => self::current_user_id(),
-						'args_json'     => $capped_args['json'],
-						'result_json'   => $capped_result['json'],
-						'status'        => $status,
-						'destructive'   => $destructive,
-						'duration_ms'   => $duration_ms,
-						'pre_hash'      => $snapshot['pre_hash'],
-						'post_hash'     => $post_hash,
-						'snapshot_id'   => $snapshot['snapshot_id'],
+						'invocation_id'        => $invocation_id,
+						'parent_invocation_id' => $parent_invocation_id,
+						'ability_name'         => $this->ability_name,
+						'caller_type'          => $caller_type,
+						'caller_id'            => $mcp_id,
+						'user_id'              => self::current_user_id(),
+						'args_json'            => $capped_args['json'],
+						'result_json'          => $capped_result['json'],
+						'status'               => $status,
+						'destructive'          => $destructive,
+						'duration_ms'          => $duration_ms,
+						'pre_hash'             => $snapshot['pre_hash'],
+						'post_hash'            => $post_hash,
+						'snapshot_id'          => $snapshot['snapshot_id'],
 					)
 				);
+
+				if ( $log_id > 0 && ! empty( $this->safety['skip_drift_check'] ) ) {
+					LogMeta::set( $log_id, 'skip_drift_check', '1' );
+				}
 
 				/**
 				 * Fires after every invocation, success or error, after the audit row is written.

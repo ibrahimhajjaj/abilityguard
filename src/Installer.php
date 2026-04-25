@@ -22,7 +22,7 @@ namespace AbilityGuard;
 final class Installer {
 
 	public const DB_VERSION_OPTION = 'abilityguard_db_version';
-	public const DB_VERSION        = '2';
+	public const DB_VERSION        = '3';
 
 	/**
 	 * Activation hook.
@@ -69,6 +69,7 @@ final class Installer {
 		$sql[] = "CREATE TABLE {$log} (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			invocation_id char(36) NOT NULL,
+			parent_invocation_id char(36) NULL,
 			ability_name varchar(191) NOT NULL,
 			caller_type varchar(20) NOT NULL DEFAULT 'internal',
 			caller_id varchar(191) NULL,
@@ -84,6 +85,7 @@ final class Installer {
 			created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY  (id),
 			UNIQUE KEY invocation_id (invocation_id),
+			KEY parent_invocation_id (parent_invocation_id),
 			KEY ability_name (ability_name),
 			KEY user_id (user_id),
 			KEY created_at (created_at),

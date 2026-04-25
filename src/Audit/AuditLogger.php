@@ -32,23 +32,28 @@ final class AuditLogger implements AuditLoggerInterface {
 			? $entry['caller_id']
 			: null;
 
+		$parent_invocation_id = isset( $entry['parent_invocation_id'] ) && is_string( $entry['parent_invocation_id'] ) && '' !== $entry['parent_invocation_id']
+			? $entry['parent_invocation_id']
+			: null;
+
 		$row     = array(
-			'invocation_id' => (string) $entry['invocation_id'],
-			'ability_name'  => (string) $entry['ability_name'],
-			'caller_type'   => (string) ( $entry['caller_type'] ?? 'internal' ),
-			'caller_id'     => $caller_id,
-			'user_id'       => (int) ( $entry['user_id'] ?? 0 ),
-			'args_json'     => $entry['args_json'] ?? null,
-			'result_json'   => $entry['result_json'] ?? null,
-			'status'        => (string) ( $entry['status'] ?? 'ok' ),
-			'destructive'   => ! empty( $entry['destructive'] ) ? 1 : 0,
-			'duration_ms'   => (int) ( $entry['duration_ms'] ?? 0 ),
-			'pre_hash'      => $entry['pre_hash'] ?? null,
-			'post_hash'     => $entry['post_hash'] ?? null,
-			'snapshot_id'   => isset( $entry['snapshot_id'] ) ? (int) $entry['snapshot_id'] : null,
-			'created_at'    => current_time( 'mysql', true ),
+			'invocation_id'        => (string) $entry['invocation_id'],
+			'parent_invocation_id' => $parent_invocation_id,
+			'ability_name'         => (string) $entry['ability_name'],
+			'caller_type'          => (string) ( $entry['caller_type'] ?? 'internal' ),
+			'caller_id'            => $caller_id,
+			'user_id'              => (int) ( $entry['user_id'] ?? 0 ),
+			'args_json'            => $entry['args_json'] ?? null,
+			'result_json'          => $entry['result_json'] ?? null,
+			'status'               => (string) ( $entry['status'] ?? 'ok' ),
+			'destructive'          => ! empty( $entry['destructive'] ) ? 1 : 0,
+			'duration_ms'          => (int) ( $entry['duration_ms'] ?? 0 ),
+			'pre_hash'             => $entry['pre_hash'] ?? null,
+			'post_hash'            => $entry['post_hash'] ?? null,
+			'snapshot_id'          => isset( $entry['snapshot_id'] ) ? (int) $entry['snapshot_id'] : null,
+			'created_at'           => current_time( 'mysql', true ),
 		);
-		$formats = array( '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%s' );
+		$formats = array( '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%s' );
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$ok = $wpdb->insert( $table, $row, $formats );
