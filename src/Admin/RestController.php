@@ -10,6 +10,7 @@ declare( strict_types=1 );
 namespace AbilityGuard\Admin;
 
 use AbilityGuard\Audit\LogRepository;
+use AbilityGuard\Rollback\BulkRollbackService;
 use AbilityGuard\Rollback\RollbackService;
 use AbilityGuard\Snapshot\SnapshotStore;
 use WP_Error;
@@ -22,6 +23,7 @@ use WP_REST_Server;
  *  - GET  /abilityguard/v1/log
  *  - GET  /abilityguard/v1/log/<id>
  *  - POST /abilityguard/v1/rollback/<id>
+ *  - POST /abilityguard/v1/rollback/bulk
  *
  * All gated by manage_options.
  */
@@ -82,6 +84,28 @@ final class RestController {
 				'permission_callback' => array( __CLASS__, 'check_perms' ),
 				'callback'            => array( __CLASS__, 'do_rollback' ),
 				'args'                => array(
+					'force' => array(
+						'type'              => 'boolean',
+						'default'           => false,
+						'sanitize_callback' => 'rest_sanitize_boolean',
+					),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/rollback/bulk',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'permission_callback' => array( __CLASS__, 'check_perms' ),
+				'callback'            => array( __CLASS__, 'do_bulk_rollback' ),
+				'args'                => array(
+					'ids'   => array(
+						'type'     => 'array',
+						'required' => true,
+						'items'    => array( 'type' => 'integer' ),
+					),
 					'force' => array(
 						'type'              => 'boolean',
 						'default'           => false,
@@ -174,5 +198,35 @@ final class RestController {
 			),
 			200
 		);
+	}
+
+	/**
+	 * POST /rollback/bulk - roll back multiple invocations by id.
+	 *
+	 * Body: { "ids": [int], "force": bool }
+	 * Cap: 500 ids per request; 501+ returns 400.
+	 *
+	 * @param \WP_REST_Request $req Request.
+	 */
+	public static function do_bulk_rollback( WP_REST_Request $req ): WP_REST_Response|WP_Error {
+		$raw_ids = $req->get_param( 'ids' );
+		if ( ! is_array( $raw_ids ) ) {
+			return new WP_Error( 'abilityguard_invalid_ids', 'ids must be an array of integers.', array( 'status' => 400 ) );
+		}
+
+		if ( count( $raw_ids ) > 500 ) {
+			return new WP_Error(
+				'abilityguard_bulk_limit_exceeded',
+				'A maximum of 500 ids may be submitted per request.',
+				array( 'status' => 400 )
+			);
+		}
+
+		$ids     = array_map( 'intval', $raw_ids );
+		$force   = (bool) $req->get_param( 'force' );
+		$service = BulkRollbackService::default();
+		$summary = $service->rollback_many( $ids, $force );
+
+		return new WP_REST_Response( $summary, 200 );
 	}
 }

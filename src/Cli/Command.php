@@ -13,6 +13,7 @@ use AbilityGuard\Approval\ApprovalRepository;
 use AbilityGuard\Approval\ApprovalService;
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Retention\RetentionService;
+use AbilityGuard\Rollback\BulkRollbackService;
 use AbilityGuard\Rollback\RollbackService;
 use AbilityGuard\Snapshot\SnapshotStore;
 use WP_CLI;
@@ -108,28 +109,48 @@ final class Command {
 	}
 
 	/**
-	 * Roll back an invocation.
+	 * Roll back an invocation (or a batch via --batch).
 	 *
 	 * ## OPTIONS
 	 *
-	 * <reference>
-	 * : Numeric log id or invocation uuid.
+	 * [<reference>]
+	 * : Numeric log id or invocation uuid. Ignored when --batch is set.
 	 *
 	 * [--yes]
-	 * : Skip confirmation.
+	 * : Skip confirmation (single-id mode only).
 	 *
 	 * [--force]
 	 * : Ignore drift and restore even if live state has changed since capture.
+	 *
+	 * [--batch=<filter>]
+	 * : Comma-separated filter list, e.g. ability=acme/foo,status=ok,destructive=1.
+	 *   When set, positional arg is ignored and no per-row confirmation is asked.
+	 *   Matched ids are capped at 500.
+	 *
+	 * [--dry-run]
+	 * : When --batch is set, print matched ids without rolling back.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp abilityguard rollback 42
+	 *     wp abilityguard rollback --batch=ability=acme/foo,status=ok --dry-run
+	 *     wp abilityguard rollback --batch=destructive=1,status=ok --force
 	 *
 	 * @param array<int, string>   $args       Positional.
 	 * @param array<string, mixed> $assoc_args Flags.
 	 */
 	public static function cmd_rollback( array $args, array $assoc_args ): void {
-		if ( empty( $args[0] ) ) {
-			WP_CLI::error( 'Pass a log id or invocation uuid.' );
-		}
-		$ref   = $args[0];
 		$force = ! empty( $assoc_args['force'] );
+
+		if ( ! empty( $assoc_args['batch'] ) ) {
+			( new self() )->bulk_rollback( (string) $assoc_args['batch'], $force, ! empty( $assoc_args['dry-run'] ) );
+			return;
+		}
+
+		if ( empty( $args[0] ) ) {
+			WP_CLI::error( 'Pass a log id or invocation uuid, or use --batch.' );
+		}
+		$ref = $args[0];
 
 		if ( empty( $assoc_args['yes'] ) ) {
 			WP_CLI::confirm( "Roll back invocation {$ref}?", $assoc_args );
@@ -142,6 +163,94 @@ final class Command {
 			WP_CLI::error( $result->get_error_message() );
 		}
 		WP_CLI::success( "Rolled back invocation {$ref}." );
+	}
+
+	/**
+	 * Handle bulk rollback via --batch filter.
+	 *
+	 * @param string $batch_filter Comma-separated key=value filter list.
+	 * @param bool   $force        Whether to ignore drift.
+	 * @param bool   $dry_run      When true, only print matched ids.
+	 */
+	private function bulk_rollback( string $batch_filter, bool $force, bool $dry_run ): void {
+		$filters             = $this->parse_batch_filter( $batch_filter );
+		$filters['per_page'] = 500;
+
+		$rows = $this->logs->list( $filters );
+		if ( empty( $rows ) ) {
+			WP_CLI::warning( 'No invocations matched the given filters.' );
+			return;
+		}
+
+		$ids = array_map( static fn( $r ) => (int) $r['id'], $rows );
+
+		if ( $dry_run ) {
+			WP_CLI::line( 'Dry-run: matched ' . count( $ids ) . ' id(s):' );
+			foreach ( $ids as $id ) {
+				WP_CLI::line( "  #{$id}" );
+			}
+			return;
+		}
+
+		$service = new BulkRollbackService( new RollbackService( new LogRepository(), new SnapshotStore() ) );
+		$summary = $service->rollback_many( $ids, $force );
+
+		foreach ( $summary['rolled_back'] as $id ) {
+			WP_CLI::line( "\u{2713} #{$id} rolled back" );
+		}
+		foreach ( $summary['skipped'] as $id => $code ) {
+			WP_CLI::line( "\u{26A0} #{$id} skipped ({$code})" );
+		}
+		foreach ( $summary['errors'] as $id => $code ) {
+			WP_CLI::line( "\u{2717} #{$id} error ({$code})" );
+		}
+
+		$rb  = count( $summary['rolled_back'] );
+		$sk  = count( $summary['skipped'] );
+		$err = count( $summary['errors'] );
+		WP_CLI::line( "Bulk rollback complete: {$rb} rolled back, {$sk} skipped, {$err} errors." );
+
+		if ( $err > 0 ) {
+			WP_CLI::warning( 'Some ids encountered hard errors. See output above.' );
+		}
+	}
+
+	/**
+	 * Parse a comma-separated batch filter string into a filters array.
+	 *
+	 * Accepted keys: ability (→ ability_name), status, destructive, caller_id.
+	 *
+	 * @param string $raw Raw filter string, e.g. "ability=acme/foo,status=ok".
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function parse_batch_filter( string $raw ): array {
+		$filters = array();
+		$pairs   = explode( ',', $raw );
+		foreach ( $pairs as $pair ) {
+			$parts = explode( '=', $pair, 2 );
+			if ( 2 !== count( $parts ) ) {
+				continue;
+			}
+			[ $key, $val ] = $parts;
+			$key           = trim( $key );
+			$val           = trim( $val );
+			switch ( $key ) {
+				case 'ability':
+					$filters['ability_name'] = $val;
+					break;
+				case 'status':
+					$filters['status'] = $val;
+					break;
+				case 'destructive':
+					$filters['destructive'] = '1' === $val || 'true' === strtolower( $val );
+					break;
+				case 'caller_id':
+					$filters['caller_id'] = $val;
+					break;
+			}
+		}
+		return $filters;
 	}
 
 	/**

@@ -53,6 +53,10 @@ if ( ! class_exists( 'WP_CLI' ) ) {
 		public static function error( string $msg ) {}
 		/** @param string $msg */
 		public static function success( string $msg ) {}
+		/** @param string $msg */
+		public static function warning( string $msg ) {}
+		/** @param string $msg */
+		public static function line( string $msg = '' ) {}
 		/** @param string $msg
 		 *  @param array<string, mixed> $assoc_args */
 		public static function confirm( string $msg, array $assoc_args = array() ) {}
