@@ -109,21 +109,31 @@ final class RollbackService {
 		}
 
 		// --- Drift check -------------------------------------------------------
+		// Compare live state to the snapshot's POST-state (what the ability left
+		// behind), not the pre-state. The ability's own mutation isn't drift -
+		// drift means "something ELSE changed state after the ability ran."
+		// If post_state is missing (pre-v0.3 snapshot, or callback threw), skip
+		// the check; we have no baseline to compare against.
 		$skip_drift       = $this->should_skip_drift( $log );
 		$drifted_surfaces = array();
+		$post_state       = is_array( $snapshot['post_state'] ?? null ) ? $snapshot['post_state'] : null;
 
-		foreach ( $snapshot['surfaces'] as $surface => $captured ) {
-			if ( ! isset( $this->collectors[ $surface ] ) || ! is_array( $captured ) ) {
-				continue;
-			}
+		if ( null !== $post_state ) {
+			foreach ( $snapshot['surfaces'] as $surface => $captured ) {
+				if ( ! isset( $this->collectors[ $surface ] ) || ! is_array( $captured ) ) {
+					continue;
+				}
+				if ( ! isset( $post_state[ $surface ] ) || ! is_array( $post_state[ $surface ] ) ) {
+					continue;
+				}
 
-			$spec          = $this->derive_spec( $surface, $captured );
-			$current       = $this->collectors[ $surface ]->collect( $spec );
-			$captured_hash = Hash::stable( $captured );
-			$current_hash  = Hash::stable( $current );
+				$spec     = $this->derive_spec( $surface, $captured );
+				$current  = $this->collectors[ $surface ]->collect( $spec );
+				$expected = $post_state[ $surface ];
 
-			if ( $captured_hash !== $current_hash ) {
-				$drifted_surfaces[] = $surface;
+				if ( Hash::stable( $current ) !== Hash::stable( $expected ) ) {
+					$drifted_surfaces[] = $surface;
+				}
 			}
 		}
 

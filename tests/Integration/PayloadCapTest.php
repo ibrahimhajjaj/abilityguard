@@ -36,6 +36,7 @@ final class PayloadCapTest extends WP_UnitTestCase {
 	 * Ability returns ~200 KB result; default 128 KB cap must truncate it.
 	 */
 	public function test_large_result_truncated_in_audit_log(): void {
+		$this->setExpectedIncorrectUsage( 'AbilityGuard' );
 		if ( ! function_exists( 'wp_register_ability' ) ) {
 			$this->markTestSkipped( 'abilities-api plugin not loaded' );
 		}
@@ -133,6 +134,7 @@ final class PayloadCapTest extends WP_UnitTestCase {
 	 * Setting safety.max_payload_bytes = 1024 overrides the global 128 KB default.
 	 */
 	public function test_per_ability_tight_cap_honored(): void {
+		$this->setExpectedIncorrectUsage( 'AbilityGuard' );
 		if ( ! function_exists( 'wp_register_ability' ) ) {
 			$this->markTestSkipped( 'abilities-api plugin not loaded' );
 		}
@@ -167,6 +169,7 @@ final class PayloadCapTest extends WP_UnitTestCase {
 	 * from the raw un-truncated surfaces so hash integrity is preserved.
 	 */
 	public function test_large_snapshot_surface_truncated_hash_preserved(): void {
+		$this->setExpectedIncorrectUsage( 'AbilityGuard' );
 		$large_value = str_repeat( 'a', 1_100_000 );
 		$small_value = 'tiny';
 		update_option( 'ag_large_option', $large_value );

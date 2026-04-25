@@ -37,9 +37,20 @@ final class RollbackDriftTest extends WP_UnitTestCase {
 	 *
 	 * @return array{ log_id: int, snapshot_id: int, pre_hash: string }
 	 */
-	private function create_snapshot_and_log( string $inv_id, array $spec, string $ability = 'test/drift' ): array {
+	private function create_snapshot_and_log( string $inv_id, array $spec, string $ability = 'test/drift', ?callable $mutate_during_invocation = null ): array {
 		$service = new SnapshotService( new SnapshotStore() );
-		$snap    = $service->capture( $inv_id, array( 'snapshot' => $spec ), null );
+		$safety  = array( 'snapshot' => $spec );
+		$snap    = $service->capture( $inv_id, $safety, null );
+
+		// Simulate the ability's execute_callback running. Tests pass a
+		// closure here that performs the "ability mutation". Anything done
+		// AFTER capture_post counts as drift caused by a third party.
+		if ( null !== $mutate_during_invocation ) {
+			$mutate_during_invocation();
+		}
+
+		// Capture post-state - what the ability left behind.
+		$service->capture_post( (int) $snap['snapshot_id'], $safety, null );
 
 		$log_id = ( new AuditLogger() )->log(
 			array(
@@ -101,13 +112,14 @@ final class RollbackDriftTest extends WP_UnitTestCase {
 
 		$this->create_snapshot_and_log(
 			'drift-none-1',
-			array( 'post_meta' => array( $post_id => array( '_price' ) ) )
+			array( 'post_meta' => array( $post_id => array( '_price' ) ) ),
+			'test/drift',
+			static function () use ( $post_id ) {
+				update_post_meta( $post_id, '_price', '20.00' );
+			}
 		);
 
-		// Ability mutation - equivalent to the ability running.
-		update_post_meta( $post_id, '_price', '20.00' );
-
-		// No further third-party mutations - no drift.
+		// No third-party mutation between capture_post and rollback → no drift.
 		$result = $this->rollback_service()->rollback( 'drift-none-1' );
 
 		$this->assertTrue( $result );
@@ -126,11 +138,12 @@ final class RollbackDriftTest extends WP_UnitTestCase {
 
 		$this->create_snapshot_and_log(
 			'drift-abort-1',
-			array( 'post_meta' => array( $post_id => array( '_price' ) ) )
+			array( 'post_meta' => array( $post_id => array( '_price' ) ) ),
+			'test/drift',
+			static function () use ( $post_id ) {
+				update_post_meta( $post_id, '_price', '20.00' );
+			}
 		);
-
-		// Ability mutation.
-		update_post_meta( $post_id, '_price', '20.00' );
 
 		// Third-party drift AFTER the ability ran.
 		update_post_meta( $post_id, '_price', '99.99' );
@@ -162,11 +175,14 @@ final class RollbackDriftTest extends WP_UnitTestCase {
 
 		$this->create_snapshot_and_log(
 			'drift-force-1',
-			array( 'post_meta' => array( $post_id => array( '_price' ) ) )
+			array( 'post_meta' => array( $post_id => array( '_price' ) ) ),
+			'test/drift',
+			static function () use ( $post_id ) {
+				update_post_meta( $post_id, '_price', '20.00' );
+			}
 		);
 
-		// Ability mutation + third-party drift.
-		update_post_meta( $post_id, '_price', '20.00' );
+		// Third-party drift after the ability ran.
 		update_post_meta( $post_id, '_price', '99.99' );
 
 		$drift_surfaces_seen = array();
