@@ -114,9 +114,13 @@ add_filter(
 
 Until that filter exists, add the guard inside your own plugin that calls `ApprovalService::approve()`.
 
-## Integrating with Slack or email
+## Integrating with Slack, email, Discord, Teams, webhooks
 
-`abilityguard_approval_requested` fires synchronously when a new approval row is recorded (v0.5+). Hook it to send Slack messages, emails, or webhooks to your approvers.
+See **[docs/notifications.md](notifications.md)** for full drop-in recipes covering Slack, `wp_mail()` email to all approvers, Discord, Microsoft Teams, and generic webhooks (Zapier / n8n / your own service), plus deferred-dispatch and testing patterns.
+
+A minimal example:
+
+`abilityguard_approval_requested` fires synchronously when a new approval row is recorded. Hook it to send Slack messages, emails, or webhooks to your approvers.
 
 ```php
 add_action(

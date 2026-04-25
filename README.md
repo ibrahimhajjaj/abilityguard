@@ -56,6 +56,7 @@ Plugin-author guides live in `docs/`:
 - [docs/approval-workflow.md](docs/approval-workflow.md) - Approval queue: when to use `requires_approval`, the approve/reject lifecycle, CLI commands, and integration recipes.
 - [docs/custom-collectors.md](docs/custom-collectors.md) - Writing your own collector: the `CollectorInterface` contract, a worked example, current extensibility limits, and testing patterns.
 - [docs/api-stability.md](docs/api-stability.md) - Public API surface (every supported PHP function, action, filter, REST route, CLI command, and capability) plus the SemVer policy.
+- [docs/notifications.md](docs/notifications.md) - Wiring approval requests to Slack, email, Discord, Microsoft Teams, or generic webhooks. Drop-in `add_action` recipes.
 
 ## Reference plugins
 
