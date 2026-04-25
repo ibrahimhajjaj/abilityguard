@@ -30,6 +30,7 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `AbilityGuard\Snapshot\Collector\CriticalFileRegistry` | 0.7 | `add( $suffix )`, `remove( $suffix )`, `matches( $path )`, `all()` for managing the critical-file allowlist used by `FilesCollector::STRATEGY_CRITICAL_HASH` |
 | `AbilityGuard\Snapshot\Collector\CollectorRegistry` | 0.8 | `register( $surface, $collector )`, `has( $surface )`, `defaults()` - process-wide registry of custom collectors layered over the built-ins. `safety.collectors` writes to this. |
 | `AbilityGuard\Snapshot\Collector\CollectorInterface` | 0.1 | The contract custom collectors must implement: `collect( $spec ): array` and `restore( array $captured ): void`. |
+| `AbilityGuard\Snapshot\FileBlobStore` | 0.9 | Sidecar staging-dir blob store powering `full_content`: `put($bytes)`, `get($hash)`, `has($hash)`, `delete($hash)`, `prune_except($keep_hashes)`, `staging_dir()`. |
 
 ### Safety config keys (passed to `wp_register_ability` under `safety`)
 
@@ -53,7 +54,7 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `options` | 0.1 | `string[]` |
 | `taxonomy` | 0.2 | `array<int $post_id, string[] $taxonomy_names>` |
 | `user_role` | 0.2 | `int[]` |
-| `files` | 0.2 | `string[]` OR `{ paths: string[]\|Traversable, strategy?: 'mtime'\|'mtime_size'\|'critical_hash'\|'full_hash', exclude_dirs?: string[] }`. Read-only restore - fires `abilityguard_files_changed_since_snapshot` and `abilityguard_files_deleted_since_snapshot` |
+| `files` | 0.2 | `string[]` OR `{ paths: string[]\|Traversable, strategy?: 'mtime'\|'mtime_size'\|'critical_hash'\|'full_hash'\|'full_content', exclude_dirs?: string[] }`. Drift-only restore for the first four strategies (fires `abilityguard_files_changed_since_snapshot` / `abilityguard_files_deleted_since_snapshot`). `full_content` (0.9+) actually restores bytes via FileBlobStore and fires `abilityguard_files_restored` on success. |
 
 ### WordPress actions
 
@@ -64,6 +65,7 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `abilityguard_rollback_drift` | 0.3 | `( $log, $snapshot, $drifted_surfaces )` |
 | `abilityguard_files_changed_since_snapshot` | 0.2 | `( string[] $changed_paths )` |
 | `abilityguard_files_deleted_since_snapshot` | 0.7 | `( string[] $deleted_paths )` - strict subset of changed paths: existed at snapshot, gone now |
+| `abilityguard_files_restored` | 0.9 | `( string[] $restored_paths )` - fired after FilesCollector successfully rewrote one or more files from a `full_content` capture |
 | `abilityguard_retention_prune` | 0.2 | `()` - daily WP cron hook running `RetentionService::prune()` |
 | `abilityguard_bulk_rollback_complete` | 0.4 | `( array $summary )` |
 | `abilityguard_approval_requested` | 0.5 | `( int $approval_id, string $ability_name, int $log_id, mixed $input, string $invocation_id )` |
@@ -89,6 +91,8 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `abilityguard_files_default_strategy` | 0.7 | `'full_hash'` | Site-wide default detection strategy for `FilesCollector` |
 | `abilityguard_files_default_exclude_dirs` | 0.7 | backup-plugin paths | Substring-match excludes applied to every `FilesCollector::collect()` call |
 | `abilityguard_files_critical_suffixes` | 0.7 | `CriticalFileRegistry::all()` | Final say over which path suffixes are "critical" under `critical_hash` |
+| `abilityguard_max_file_bytes` | 0.9 | `262144` (256 KB) | Per-file cap for `full_content` capture. Files over this are fingerprinted-only with a doing-it-wrong notice. |
+| `abilityguard_file_blob_dir` | 0.9 | `wp-content/abilityguard-staging` | Override the staging directory used by FileBlobStore (tests / unusual hosts). |
 
 ### REST endpoints (namespace `abilityguard/v1`)
 

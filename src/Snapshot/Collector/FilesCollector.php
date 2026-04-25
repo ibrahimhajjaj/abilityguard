@@ -70,6 +70,15 @@ final class FilesCollector implements CollectorInterface {
 	public const STRATEGY_MTIME_SIZE    = 'mtime_size';
 	public const STRATEGY_CRITICAL_HASH = 'critical_hash';
 	public const STRATEGY_FULL_HASH     = 'full_hash';
+	public const STRATEGY_FULL_CONTENT  = 'full_content';
+
+	/**
+	 * Hard byte cap per captured file body under STRATEGY_FULL_CONTENT.
+	 * Files larger than this fall back to fingerprint-only with a notice.
+	 *
+	 * Filterable via `abilityguard_max_file_bytes`.
+	 */
+	private const DEFAULT_MAX_FILE_BYTES = 262144; // 256 KB
 
 	/**
 	 * Other-plugin backup directories we exclude by default. Lifted from
@@ -106,7 +115,7 @@ final class FilesCollector implements CollectorInterface {
 	 *                    `paths`, optional `strategy`, optional `exclude_dirs`.
 	 *                    `paths` may also be a Traversable.
 	 *
-	 * @return array<string, array{exists: bool, sha256: ?string, size: ?int, mtime: ?int}>
+	 * @return array<string, array{exists: bool, sha256: ?string, size: ?int, mtime: ?int, mode?: ?int, blob?: ?string}>
 	 */
 	public function collect( $spec ): array {
 		[ $paths, $strategy, $exclude_dirs ] = $this->resolve_spec( $spec );
@@ -142,20 +151,53 @@ final class FilesCollector implements CollectorInterface {
 			$stat = @stat( $path );
 			$size = ( false !== $stat ) ? (int) $stat['size'] : null;
 			$mt   = ( false !== $stat ) ? (int) $stat['mtime'] : null;
+			$mode = ( false !== $stat ) ? ( (int) $stat['mode'] & 0777 ) : null;
 
 			$hash = null;
 			if ( $this->should_hash( $path, $strategy ) ) {
 				$h    = @hash_file( 'sha256', $path );
 				$hash = ( false !== $h ) ? $h : null;
 			}
+
+			$blob = null;
+			if ( self::STRATEGY_FULL_CONTENT === $strategy ) {
+				$max_bytes = $this->max_file_bytes();
+				if ( null !== $size && $size > $max_bytes ) {
+					// Oversize: behave like a fingerprint-only capture and
+					// nudge the developer. Don't error - a 200 MB file
+					// shouldn't poison the whole snapshot.
+					$this->doing_it_wrong_oversize( $path, $size, $max_bytes );
+				} else {
+					$bytes = @file_get_contents( $path );
+					if ( false !== $bytes ) {
+						try {
+							$blob = \AbilityGuard\Snapshot\FileBlobStore::put( $bytes );
+							if ( null === $hash ) {
+								$hash = hash( 'sha256', $bytes );
+							}
+						} catch ( \RuntimeException $e ) {
+							// Encryption / atomic-write failed - keep snapshotting,
+							// drop content; rollback will fall back to drift action.
+							$blob = null;
+						}
+					}
+				}
+			}
 			// phpcs:enable
 
-			$out[ $path ] = array(
+			$entry = array(
 				'exists' => true,
 				'sha256' => $hash,
 				'size'   => $size,
 				'mtime'  => $mt,
 			);
+			if ( null !== $mode ) {
+				$entry['mode'] = $mode;
+			}
+			if ( null !== $blob ) {
+				$entry['blob'] = $blob;
+			}
+			$out[ $path ] = $entry;
 		}
 
 		ksort( $out );
@@ -164,24 +206,27 @@ final class FilesCollector implements CollectorInterface {
 	}
 
 	/**
-	 * No-op restore: files are not restored.
+	 * Restore captured file state.
 	 *
-	 * Compares captured state to current state using each entry's
-	 * available signals (sha256 if present, otherwise size + mtime),
-	 * and fires `abilityguard_files_changed_since_snapshot` with the
-	 * paths whose state has changed.
+	 * For entries captured under STRATEGY_FULL_CONTENT (i.e. carrying a
+	 * `blob` hash), this rewrites the file with the captured bytes via
+	 * temp-file + rename, restores the captured octal mode, and re-creates
+	 * deleted files that have a stored blob. Entries without a blob hash
+	 * keep the previous behavior - fire the changed/deleted actions and
+	 * leave the filesystem alone.
 	 *
-	 * Deletions (captured.exists=true && current.exists=false) are also
-	 * fired as a distinct signal via `abilityguard_files_deleted_since_snapshot`
-	 * so listeners that care specifically about disappearance (security
-	 * monitors, restore prompts) can react without re-deriving it from a
-	 * generic change list.
+	 * Path safety: every target path is validated against directory
+	 * traversal, null bytes, and (when the directory exists) realpath
+	 * containment within ABSPATH. Anything that fails validation is
+	 * skipped silently - a malicious snapshot row should never be able to
+	 * coerce a write outside the install.
 	 *
 	 * @param array<mixed> $captured See collect() output.
 	 */
 	public function restore( array $captured ): void {
-		$changed_paths = array();
-		$deleted_paths = array();
+		$changed_paths  = array();
+		$deleted_paths  = array();
+		$restored_paths = array();
 
 		foreach ( $captured as $path => $state ) {
 			$path = (string) $path;
@@ -190,21 +235,39 @@ final class FilesCollector implements CollectorInterface {
 				continue;
 			}
 
-			$current = $this->collect( array( $path ) );
-			if ( ! isset( $current[ $path ] ) ) {
-				$changed_paths[] = $path;
+			$current    = $this->collect( array( $path ) );
+			$has_change = ! isset( $current[ $path ] ) || $this->state_differs( $state, $current[ $path ] );
+
+			if ( ! $has_change ) {
 				continue;
 			}
 
-			if ( $this->state_differs( $state, $current[ $path ] ) ) {
-				$changed_paths[] = $path;
+			$changed_paths[] = $path;
 
-				// Deletion-specific: was present at snapshot, gone now.
-				$cap_exists = ! empty( $state['exists'] );
-				$cur_exists = ! empty( $current[ $path ]['exists'] );
-				if ( $cap_exists && ! $cur_exists ) {
-					$deleted_paths[] = $path;
-				}
+			$cap_exists = ! empty( $state['exists'] );
+			$cur_exists = ! empty( $current[ $path ]['exists'] ?? false );
+			if ( $cap_exists && ! $cur_exists ) {
+				$deleted_paths[] = $path;
+			}
+
+			// Real content restore: only when a blob hash was captured.
+			$blob_hash = isset( $state['blob'] ) && is_string( $state['blob'] ) ? $state['blob'] : '';
+			if ( '' === $blob_hash ) {
+				continue;
+			}
+
+			if ( ! $this->is_safe_path( $path ) ) {
+				continue;
+			}
+
+			$bytes = \AbilityGuard\Snapshot\FileBlobStore::get( $blob_hash );
+			if ( null === $bytes ) {
+				// Blob missing or tamper-detected; treat as drift.
+				continue;
+			}
+
+			if ( $this->write_atomic( $path, $bytes, $state['mode'] ?? null ) ) {
+				$restored_paths[] = $path;
 			}
 		}
 
@@ -215,6 +278,122 @@ final class FilesCollector implements CollectorInterface {
 			// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.DynamicHooknameFound
 			do_action( 'abilityguard_files_deleted_since_snapshot', $deleted_paths );
 		}
+
+		if ( array() !== $restored_paths ) {
+			/**
+			 * Fires after FilesCollector successfully rewrote one or more
+			 * files from a STRATEGY_FULL_CONTENT capture. Emitted in
+			 * addition to the generic changed/deleted actions so listeners
+			 * can distinguish "we restored bytes" from "drift was detected".
+			 *
+			 * @since 0.9
+			 *
+			 * @param string[] $restored_paths Absolute paths just rewritten.
+			 */
+			do_action( 'abilityguard_files_restored', $restored_paths );
+		}
+	}
+
+	/**
+	 * Atomic write: temp file in the same directory, then rename. Restores
+	 * the captured mode if provided. Returns true on success.
+	 *
+	 * @param string   $path  Absolute target path.
+	 * @param string   $bytes File body to write.
+	 * @param int|null $mode  Captured octal mode (e.g. 0644). Skipped when null.
+	 */
+	private function write_atomic( string $path, string $bytes, $mode ): bool {
+		$dir = dirname( $path );
+		if ( ! is_dir( $dir ) && ! wp_mkdir_p( $dir ) ) {
+			return false;
+		}
+
+		$tmp = $path . '.ag-restore-' . bin2hex( random_bytes( 4 ) );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+		if ( false === file_put_contents( $tmp, $bytes ) ) {
+			return false;
+		}
+		if ( ! rename( $tmp, $path ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
+			@unlink( $tmp );
+			return false;
+		}
+		if ( null !== $mode ) {
+			// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- Restoring captured octal mode is the point; chmod() failure is non-fatal here.
+			@chmod( $path, ( (int) $mode ) & 0777 );
+		}
+		return true;
+	}
+
+	/**
+	 * SafeGuard-style path validation: reject `..`, null bytes, and
+	 * confirm the resolved target stays within ABSPATH.
+	 *
+	 * Mirrors the `is_safe_path()` helper in SafeGuard's File_Restorer
+	 * (see plugin/includes/restore/class-file-restorer.php).
+	 *
+	 * @param string $path Absolute path to validate.
+	 */
+	private function is_safe_path( string $path ): bool {
+		if ( '' === $path ) {
+			return false;
+		}
+		if ( false !== strpos( $path, "\0" ) ) {
+			return false;
+		}
+		if ( preg_match( '#(?:^|/|\\\\)\.\.(?:/|\\\\|$)#', $path ) ) {
+			return false;
+		}
+		// realpath() the parent dir; the file itself may not exist (deletion-restore).
+		$dir      = dirname( $path );
+		$real_dir = realpath( $dir );
+		if ( false === $real_dir ) {
+			// Parent dir absent - verify the requested ABSPATH ancestor
+			// segment is real and contains the parent.
+			$abspath = realpath( ABSPATH );
+			return is_string( $abspath ) && 0 === strpos( $dir, $abspath );
+		}
+		$abspath = realpath( ABSPATH );
+		if ( false === $abspath ) {
+			return false;
+		}
+		return 0 === strpos( $real_dir, $abspath );
+	}
+
+	/**
+	 * Resolve the configured per-file byte cap.
+	 */
+	private function max_file_bytes(): int {
+		$default = self::DEFAULT_MAX_FILE_BYTES;
+		if ( ! function_exists( 'apply_filters' ) ) {
+			return $default;
+		}
+		$filtered = (int) apply_filters( 'abilityguard_max_file_bytes', $default );
+		return $filtered > 0 ? $filtered : $default;
+	}
+
+	/**
+	 * Surface a doing-it-wrong notice when a file exceeds the per-file cap.
+	 *
+	 * @param string $path      Path that overshot the cap.
+	 * @param int    $size      Actual size in bytes.
+	 * @param int    $max_bytes Configured cap.
+	 */
+	private function doing_it_wrong_oversize( string $path, int $size, int $max_bytes ): void {
+		if ( ! function_exists( '_doing_it_wrong' ) || ! defined( 'WP_DEBUG' ) || ! WP_DEBUG ) {
+			return;
+		}
+		_doing_it_wrong(
+			'AbilityGuard FilesCollector',
+			sprintf(
+				/* translators: 1: file path, 2: actual size, 3: configured cap */
+				esc_html__( 'File "%1$s" (%2$d bytes) exceeds the abilityguard_max_file_bytes cap (%3$d). Captured as fingerprint-only; rollback will not restore content for this path.', 'abilityguard' ),
+				esc_html( $path ),
+				absint( $size ),
+				absint( $max_bytes )
+			),
+			'0.9.0'
+		);
 	}
 
 	/**
@@ -293,6 +472,7 @@ final class FilesCollector implements CollectorInterface {
 			self::STRATEGY_MTIME_SIZE,
 			self::STRATEGY_CRITICAL_HASH,
 			self::STRATEGY_FULL_HASH,
+			self::STRATEGY_FULL_CONTENT,
 		);
 		return in_array( $strategy, $valid, true ) ? $strategy : $fallback;
 	}

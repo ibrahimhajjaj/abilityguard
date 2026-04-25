@@ -229,7 +229,7 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 			$inner_ability,
 			array( 'destructive' => false )
 		);
-		$inner = $inner_wrapper->wrap( static fn() => 'inner-ok' );
+		$inner         = $inner_wrapper->wrap( static fn() => 'inner-ok' );
 
 		++self::$counter;
 		$outer_ability = 'corr-test/mcp-outer-' . self::$counter;
@@ -239,7 +239,7 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 			$outer_ability,
 			array( 'destructive' => false )
 		);
-		$outer = $outer_wrapper->wrap(
+		$outer         = $outer_wrapper->wrap(
 			static function () use ( $inner ) {
 				$inner( null );
 				return 'outer-ok';

@@ -245,12 +245,36 @@ wp_register_ability( 'acme-shop/update-product-price', array(
 
 | Strategy | Hashes | Use when |
 |---|---|---|
-| `mtime` | never | Cheapest. Catches naïve edits, misses content-preserving rsync/touch tricks. |
-| `mtime_size` | never | Better signal than mtime alone for very large path counts. |
-| `critical_hash` | only paths matching `CriticalFileRegistry::matches()` | Default-ish: hash the high-value files (`wp-config.php`, `.env`, `.htaccess`, anything plugins register), stat the rest. |
-| `full_hash` | every path | Most accurate, slowest. Default for back-compat. |
+| `mtime` | never | Cheapest. Catches naïve edits, misses content-preserving rsync/touch tricks. Drift-only - restore is a no-op. |
+| `mtime_size` | never | Better signal than mtime alone for very large path counts. Drift-only. |
+| `critical_hash` | only paths matching `CriticalFileRegistry::matches()` | Default-ish: hash the high-value files (`wp-config.php`, `.env`, `.htaccess`, anything plugins register), stat the rest. Drift-only. |
+| `full_hash` | every path | Most accurate, slowest. Default for back-compat. Drift-only. |
+| `full_content` | every path AND captures bytes | The only strategy that actually rewrites file contents on rollback. Use for small config-style files (256 KB cap per file by default). |
 
 Override the global default with the `abilityguard_files_default_strategy` filter.
+
+**`full_content` - real file rollback (v0.9).** Set `strategy => 'full_content'` to opt into actual byte-level capture and restore:
+
+```php
+'snapshot' => array(
+    'files' => array(
+        'paths'    => array( WP_CONTENT_DIR . '/uploads/my-plugin/config.json' ),
+        'strategy' => 'full_content',
+    ),
+),
+```
+
+What you get:
+
+- File bytes are AES-256-GCM encrypted and stored in `wp-content/abilityguard-staging/<sha256>` - content-addressed, so identical files dedupe across snapshots.
+- Octal mode (e.g. 0644) is captured and restored. Owner/group are not preserved (avoids www-data/nginx UID-mismatch headaches).
+- On rollback, files are rewritten via temp-file + `rename()` (POSIX-atomic on the same filesystem). Deleted files are re-created from their captured blob.
+- Path safety: every restore target is validated against directory traversal, null bytes, and `realpath()` containment within `ABSPATH`. Paths failing validation are skipped silently.
+- Tampered blobs (anyone editing the files in the staging dir) fail the post-decrypt sha256 check and the file is left alone - failsafe rather than corrupt.
+- Files larger than `abilityguard_max_file_bytes` (default 256 KB) fall back to fingerprint-only with a `_doing_it_wrong` notice. Raise via the filter if you genuinely need bigger captures, but consider whether the file belongs in the snapshot at all.
+- Successfully-rewritten files fire `abilityguard_files_restored` (in addition to the existing `abilityguard_files_changed_since_snapshot` action) so observers can distinguish "we rewrote bytes" from "drift was detected".
+
+Retention runs an orphan sweep on the staging dir alongside the snapshots table - blobs no longer referenced by any live snapshot get unlinked.
 
 **`CriticalFileRegistry`.** Plugins can register additional critical-path matchers imperatively:
 
