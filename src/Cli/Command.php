@@ -9,6 +9,8 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Cli;
 
+use AbilityGuard\Approval\ApprovalRepository;
+use AbilityGuard\Approval\ApprovalService;
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Retention\RetentionService;
 use AbilityGuard\Rollback\RollbackService;
@@ -49,6 +51,7 @@ final class Command {
 		WP_CLI::add_command( 'abilityguard log', array( __CLASS__, 'cmd_log_root' ) );
 		WP_CLI::add_command( 'abilityguard rollback', array( __CLASS__, 'cmd_rollback' ) );
 		WP_CLI::add_command( 'abilityguard prune', array( __CLASS__, 'cmd_prune' ) );
+		WP_CLI::add_command( 'abilityguard approval', array( __CLASS__, 'cmd_approval_root' ) );
 	}
 
 	/**
@@ -156,6 +159,100 @@ final class Command {
 				$result['snapshots_deleted']
 			)
 		);
+	}
+
+	/**
+	 * Dispatch `wp abilityguard approval <sub>` (list|approve|reject).
+	 *
+	 * ## OPTIONS
+	 *
+	 * <subcommand>
+	 * : One of: list, approve, reject.
+	 *
+	 * [<id>]
+	 * : For `approve` and `reject`: numeric approval id.
+	 *
+	 * [--status=<s>]
+	 * : Filter by status (list): pending|approved|rejected.
+	 *
+	 * [--format=<format>]
+	 * : Output format: table|csv|json|yaml. Default: table.
+	 *
+	 * @param array<int, string>   $args       Positional args.
+	 * @param array<string, mixed> $assoc_args Flags.
+	 */
+	public function cmd_approval( array $args, array $assoc_args ): void {
+		$sub = $args[0] ?? 'list';
+		switch ( $sub ) {
+			case 'list':
+				$this->approval_list( $assoc_args );
+				return;
+			case 'approve':
+				if ( empty( $args[1] ) ) {
+					WP_CLI::error( 'Pass an approval id: wp abilityguard approval approve <id>' );
+				}
+				$this->approval_decide( (int) $args[1], 'approve' );
+				return;
+			case 'reject':
+				if ( empty( $args[1] ) ) {
+					WP_CLI::error( 'Pass an approval id: wp abilityguard approval reject <id>' );
+				}
+				$this->approval_decide( (int) $args[1], 'reject' );
+				return;
+			default:
+				WP_CLI::error( "Unknown subcommand: {$sub}" );
+		}
+	}
+
+	/**
+	 * Static dispatcher for `wp abilityguard approval`.
+	 *
+	 * @param array<int, string>   $args       Positional.
+	 * @param array<string, mixed> $assoc_args Flags.
+	 */
+	public static function cmd_approval_root( array $args, array $assoc_args ): void {
+		( new self() )->cmd_approval( $args, $assoc_args );
+	}
+
+	/**
+	 * Render `approval list`.
+	 *
+	 * @param array<string, mixed> $assoc_args Flags.
+	 */
+	private function approval_list( array $assoc_args ): void {
+		$filters = array();
+		if ( ! empty( $assoc_args['status'] ) ) {
+			$filters['status'] = (string) $assoc_args['status'];
+		}
+
+		$repo   = new \AbilityGuard\Approval\ApprovalRepository();
+		$rows   = $repo->list( $filters );
+		$format = (string) ( $assoc_args['format'] ?? 'table' );
+		$fields = array( 'id', 'log_id', 'ability_name', 'status', 'requested_by', 'decided_by', 'decided_at', 'created_at' );
+
+		Utils\format_items( $format, $rows, $fields );
+	}
+
+	/**
+	 * Approve or reject an approval row.
+	 *
+	 * @param int    $approval_id Approval row id.
+	 * @param string $action      'approve' or 'reject'.
+	 */
+	private function approval_decide( int $approval_id, string $action ): void {
+		$user_id = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
+		$service = new \AbilityGuard\Approval\ApprovalService();
+
+		$result = 'approve' === $action
+			? $service->approve( $approval_id, $user_id )
+			: $service->reject( $approval_id, $user_id );
+
+		if ( is_wp_error( $result ) ) {
+			WP_CLI::error( $result->get_error_message() );
+		}
+
+		$verb = 'approve' === $action ? 'Approved' : 'Rejected';
+		WP_CLI::success( "{$verb} approval {$approval_id}." );
 	}
 
 	/**

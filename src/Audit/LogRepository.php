@@ -16,7 +16,7 @@ use AbilityGuard\Installer;
  */
 class LogRepository {
 
-	private const ALLOWED_STATUS = array( 'ok', 'error', 'rolled_back', 'pending' );
+	private const ALLOWED_STATUS = array( 'ok', 'error', 'rolled_back', 'pending', 'rejected' );
 
 	/**
 	 * Find a row by primary key.

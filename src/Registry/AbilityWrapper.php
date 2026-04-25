@@ -10,11 +10,13 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Registry;
 
+use AbilityGuard\Approval\ApprovalService;
 use AbilityGuard\Contracts\AuditLoggerInterface;
 use AbilityGuard\Contracts\SnapshotServiceInterface;
 use AbilityGuard\Support\Hash;
 use AbilityGuard\Support\Json;
 use Throwable;
+use WP_Error;
 
 /**
  * AbilityWrapper.
@@ -56,8 +58,44 @@ final class AbilityWrapper {
 	 */
 	public function wrap( callable $original_callback ): callable {
 		return function ( $input = null ) use ( $original_callback ) {
-			$invocation_id = self::uuid4();
-			$destructive   = (bool) ( $this->safety['destructive'] ?? false );
+			$invocation_id     = self::uuid4();
+			$destructive       = (bool) ( $this->safety['destructive'] ?? false );
+			$requires_approval = ! empty( $this->safety['requires_approval'] );
+
+			// Approval gate: block execution, log as pending, return WP_Error(202).
+			if ( $requires_approval && ! ApprovalService::is_approving() ) {
+				$snapshot = $this->snapshots->capture( $invocation_id, $this->safety, $input );
+
+				$log_id = $this->audit->log(
+					array(
+						'invocation_id' => $invocation_id,
+						'ability_name'  => $this->ability_name,
+						'caller_type'   => self::detect_caller_type(),
+						'user_id'       => self::current_user_id(),
+						'args_json'     => self::encode_or_null( $input ),
+						'result_json'   => null,
+						'status'        => 'pending',
+						'destructive'   => $destructive,
+						'duration_ms'   => 0,
+						'pre_hash'      => $snapshot['pre_hash'],
+						'post_hash'     => null,
+						'snapshot_id'   => $snapshot['snapshot_id'],
+					)
+				);
+
+				$approval_service = new ApprovalService();
+				$approval_id      = $approval_service->request( $this->ability_name, $input, $invocation_id, $log_id );
+
+				return new WP_Error(
+					'abilityguard_pending_approval',
+					sprintf( 'Ability "%s" requires approval before execution.', $this->ability_name ),
+					array(
+						'status'      => 202,
+						'approval_id' => $approval_id,
+						'log_id'      => $log_id,
+					)
+				);
+			}
 
 			$snapshot = $this->snapshots->capture( $invocation_id, $this->safety, $input );
 

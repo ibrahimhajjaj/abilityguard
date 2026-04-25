@@ -46,9 +46,9 @@ final class DiffServiceTest extends WP_UnitTestCase {
 
 		// Mutate only some values.
 		update_post_meta( $post_id, '_price', '20.00' );
-		// _sku stays 'ABC'
+		// _sku stays 'ABC'.
 		update_option( 'demo_opt', 'after' );
-		// stable_opt stays 'constant'
+		// stable_opt stays 'constant'.
 
 		$service->capture_post( $snap['snapshot_id'], $safety, null );
 

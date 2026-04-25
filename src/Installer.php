@@ -61,6 +61,7 @@ final class Installer {
 		$log             = $wpdb->prefix . 'abilityguard_log';
 		$log_meta        = $wpdb->prefix . 'abilityguard_log_meta';
 		$snapshots       = $wpdb->prefix . 'abilityguard_snapshots';
+		$approvals       = $wpdb->prefix . 'abilityguard_approvals';
 
 		$sql = array();
 
@@ -111,6 +112,22 @@ final class Installer {
 			KEY created_at (created_at)
 		) {$charset_collate};";
 
+		$sql[] = "CREATE TABLE {$approvals} (
+			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+			log_id bigint(20) NOT NULL,
+			ability_name varchar(191) NOT NULL,
+			input_json longtext NULL,
+			status varchar(20) NOT NULL DEFAULT 'pending',
+			requested_by bigint(20) unsigned NOT NULL DEFAULT 0,
+			decided_by bigint(20) unsigned NOT NULL DEFAULT 0,
+			decided_at datetime NULL,
+			created_at datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY  (id),
+			KEY log_id (log_id),
+			KEY status (status),
+			KEY ability_name (ability_name)
+		) {$charset_collate};";
+
 		foreach ( $sql as $statement ) {
 			dbDelta( $statement );
 		}
@@ -121,7 +138,7 @@ final class Installer {
 	/**
 	 * Table name helper.
 	 *
-	 * @param 'log'|'log_meta'|'snapshots' $which Table key.
+	 * @param 'log'|'log_meta'|'snapshots'|'approvals' $which Table key.
 	 */
 	public static function table( string $which ): string {
 		global $wpdb;

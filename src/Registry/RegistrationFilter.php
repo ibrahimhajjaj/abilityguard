@@ -9,6 +9,7 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Registry;
 
+use AbilityGuard\Approval\ApprovalService;
 use AbilityGuard\Contracts\AuditLoggerInterface;
 use AbilityGuard\Contracts\SnapshotServiceInterface;
 
@@ -46,6 +47,11 @@ final class RegistrationFilter {
 	 * @return array<string, mixed> Possibly-mutated args.
 	 */
 	public function filter_args( array $args, string $name ): array {
+		// During approval execution, skip wrapping to avoid re-queueing.
+		if ( ApprovalService::is_approving() ) {
+			return $args;
+		}
+
 		if ( empty( $args['safety'] ) || ! is_array( $args['safety'] ) ) {
 			return $args;
 		}
