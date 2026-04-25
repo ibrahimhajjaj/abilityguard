@@ -5,6 +5,24 @@ import * as ReactDOM from "react-dom/client";
 
 const BOOT = window.AbilityGuardData || { rows: [], rest: { url: "", nonce: "" } };
 
+// Build a REST URL that works for both pretty-permalink (`/wp-json/...`) and
+// query-string (`?rest_route=/...`) bases. WordPress falls back to the second
+// when permalinks are unset (default in fresh wp-env). Naively appending
+// `?status=pending` to an already-`?rest_route=` URL produces double-`?` and
+// 404s, so detect the form and join with the correct separator.
+function restUrl(path, params) {
+  const base = BOOT.rest.url + path;
+  if (!params) return base;
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null) continue;
+    qs.set(k, String(v));
+  }
+  const tail = qs.toString();
+  if (!tail) return base;
+  return base + (base.includes("?") ? "&" : "?") + tail;
+}
+
 function avatarClass(seed) {
   const palette = ["a-sc", "a-mt", "a-dm", "a-jw", "a-rk"];
   let h = 0;
@@ -272,8 +290,7 @@ function useStore() {
     closeModal();
     pushToast({ kind: "pending", title: `Rolling back #${rowId}…`, body: "Restoring snapshot…", duration: 30000 });
 
-    const qs = force ? "?force=1" : "";
-    fetch(`${BOOT.rest.url}rollback/${rowId}${qs}`, {
+    fetch(restUrl(`rollback/${rowId}`, force ? { force: 1 } : null), {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-WP-Nonce": BOOT.rest.nonce },
     })
@@ -310,7 +327,7 @@ function useStore() {
     closeModal();
     pushToast({ kind: "pending", title: `Rolling back ${ids.length} invocations…`, body: "Please wait…", duration: 60000 });
 
-    fetch(`${BOOT.rest.url}rollback/bulk`, {
+    fetch(restUrl("rollback/bulk"), {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-WP-Nonce": BOOT.rest.nonce },
       body: JSON.stringify({ ids, force }),
@@ -1004,7 +1021,7 @@ function ListScreen({ store }) {
 function RetentionWidget() {
   const [info, setInfo] = React.useState(null);
   React.useEffect(() => {
-    fetch(`${BOOT.rest.url}retention`, { headers: { "X-WP-Nonce": BOOT.rest.nonce } })
+    fetch(restUrl("retention"), { headers: { "X-WP-Nonce": BOOT.rest.nonce } })
       .then((r) => r.json())
       .then((body) => { if (body && body.normal_days !== undefined) setInfo(body); })
       .catch(() => {});
@@ -1035,7 +1052,7 @@ function ApprovalsView({ store }) {
   const load = React.useCallback(() => {
     setLoading(true);
     setError(null);
-    fetch(`${BOOT.rest.url}approval?status=pending&per_page=100`, {
+    fetch(restUrl("approval", { status: "pending", per_page: 100 }), {
       headers: { "X-WP-Nonce": BOOT.rest.nonce },
     })
       .then((r) => {
@@ -1061,7 +1078,7 @@ function ApprovalsView({ store }) {
 
   const act = (id, action) => {
     setActing((a) => ({ ...a, [id]: true }));
-    fetch(`${BOOT.rest.url}approval/${id}/${action}`, {
+    fetch(restUrl(`approval/${id}/${action}`), {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-WP-Nonce": BOOT.rest.nonce },
     })
@@ -1246,7 +1263,7 @@ function useDetail(id) {
     if (!id) return;
     let cancelled = false;
     setState({ loading: true, error: null, log: null, snapshot: null });
-    fetch(`${BOOT.rest.url}log/${id}`, { headers: { "X-WP-Nonce": BOOT.rest.nonce } })
+    fetch(restUrl(`log/${id}`), { headers: { "X-WP-Nonce": BOOT.rest.nonce } })
       .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
       .then(({ ok, body }) => {
         if (cancelled) return;
