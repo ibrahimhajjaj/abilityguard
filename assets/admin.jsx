@@ -763,14 +763,26 @@ const DAYS_PER_PAGE = 7;
 const ROWS_PER_DAY_PAGE = 15;
 
 function ListScreen({ store }) {
-  const allGroups = React.useMemo(() => groupByDay(store.filtered), [store.filtered]);
+  const [sort, setSort] = React.useState("newest"); // "newest" | "slowest" | "disruptive"
+  const allGroups = React.useMemo(() => {
+    const groups = groupByDay(store.filtered);
+    if (sort === "newest") return groups;
+    const cmp = sort === "slowest"
+      ? (a, b) => (b.duration ?? 0) - (a.duration ?? 0)
+      : (a, b) => {
+          // Most disruptive: destructive first, then errors, then rolled, then by duration desc.
+          const score = (r) => (r.destructive ? 1000 : 0) + (r.status === "err" ? 100 : 0) + (r.status === "rolled" ? 50 : 0) + (r.duration ?? 0) / 1000;
+          return score(b) - score(a);
+        };
+    return groups.map((g) => ({ ...g, items: [...g.items].sort(cmp) }));
+  }, [store.filtered, sort]);
   const [daysShown, setDaysShown] = React.useState(DAYS_PER_PAGE);
   const [collapsedDays, setCollapsedDays] = React.useState({});
   const [dayPages, setDayPages] = React.useState({});
   const [jumpDate, setJumpDate] = React.useState("");
   const [subView, setSubView] = React.useState("activity"); // "activity" | "approvals"
 
-  const filterKey = `${store.filtered.length}-${store.tokens.length}-${store.query}`;
+  const filterKey = `${store.filtered.length}-${store.tokens.length}-${store.query}-${sort}`;
   React.useEffect(() => { setDaysShown(DAYS_PER_PAGE); setCollapsedDays({}); setDayPages({}); }, [filterKey]);
 
   const dateToIndex = React.useMemo(() => {
@@ -951,9 +963,18 @@ function ListScreen({ store }) {
                   >Today</button>
                 </div>
                 <div className="cp-sort">
-                  <button className="cp-sort-btn is-active">newest</button>
-                  <button className="cp-sort-btn">slowest</button>
-                  <button className="cp-sort-btn">most disruptive</button>
+                  <button
+                    className={`cp-sort-btn ${sort === "newest" ? "is-active" : ""}`}
+                    onClick={() => setSort("newest")}
+                  >newest</button>
+                  <button
+                    className={`cp-sort-btn ${sort === "slowest" ? "is-active" : ""}`}
+                    onClick={() => setSort("slowest")}
+                  >slowest</button>
+                  <button
+                    className={`cp-sort-btn ${sort === "disruptive" ? "is-active" : ""}`}
+                    onClick={() => setSort("disruptive")}
+                  >most disruptive</button>
                 </div>
               </div>
 
