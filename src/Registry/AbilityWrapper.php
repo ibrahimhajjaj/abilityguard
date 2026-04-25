@@ -225,6 +225,26 @@ final class AbilityWrapper {
 					 * @param int             $duration_ms   Time spent in the callback.
 					 */
 					do_action( 'abilityguard_invocation_error', $invocation_id, $this->ability_name, $thrown, $result, $duration_ms );
+
+					// Distinguish soft errors (WP_Error returned) from hard
+					// failures (uncaught exception). Observability hooks
+					// (Sentry, Datadog) usually want to escalate the latter.
+					if ( null !== $thrown ) {
+						/**
+						 * Fires only when the wrapped callback threw an
+						 * uncaught exception. WP_Error returns DO NOT fire
+						 * this - see `abilityguard_invocation_error` for
+						 * the catch-all hook.
+						 *
+						 * @since 1.2.0
+						 *
+						 * @param string    $invocation_id UUID.
+						 * @param string    $ability_name  Ability name.
+						 * @param Throwable $thrown        The exception.
+						 * @param int       $duration_ms   Time spent in the callback before the throw.
+						 */
+						do_action( 'abilityguard_invocation_failed', $invocation_id, $this->ability_name, $thrown, $duration_ms );
+					}
 				}
 
 				if ( 'ok' === $status && null !== $snapshot['snapshot_id'] ) {

@@ -256,7 +256,7 @@ final class FilesCollector implements CollectorInterface {
 				continue;
 			}
 
-			if ( ! $this->is_safe_path( $path ) ) {
+			if ( ! self::is_safe_path( $path ) ) {
 				continue;
 			}
 
@@ -332,7 +332,7 @@ final class FilesCollector implements CollectorInterface {
 	 *
 	 * @param string $path Absolute path to validate.
 	 */
-	private function is_safe_path( string $path ): bool {
+	public static function is_safe_path( string $path ): bool {
 		if ( '' === $path ) {
 			return false;
 		}

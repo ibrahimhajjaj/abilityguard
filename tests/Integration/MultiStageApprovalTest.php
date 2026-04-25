@@ -206,6 +206,73 @@ final class MultiStageApprovalTest extends WP_UnitTestCase {
 		$this->assertSame( 'abilityguard_approve_self_forbidden', $err->get_error_code() );
 	}
 
+	public function test_parallel_quorum_holds_until_threshold(): void {
+		$log_id  = $this->seed_log_row( 'mstage/parallel' );
+		$service = new ApprovalService();
+		$id      = $service->request(
+			'mstage/parallel',
+			new \stdClass(),
+			'inv-parallel',
+			$log_id,
+			array(
+				array(
+					'cap'      => 'manage_abilityguard_approvals',
+					'required' => 2,
+				),
+			)
+		);
+
+		$repo  = new ApprovalRepository();
+		$stage = $repo->find_active_stage( $id );
+		$this->assertSame( 2, (int) $stage['required_count'] );
+		$this->assertSame( 0, (int) $stage['decision_count'] );
+
+		$u1 = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		$u2 = self::factory()->user->create( array( 'role' => 'administrator' ) );
+
+		// First approve: count=1, still below threshold of 2 → status stays waiting.
+		$ok = $service->approve( $id, $u1 );
+		$this->assertTrue( true === $ok );
+		$stage = $repo->find_active_stage( $id );
+		$this->assertNotNull( $stage, 'stage must still be waiting after one of two approvals' );
+		$this->assertSame( 1, (int) $stage['decision_count'] );
+
+		// Second approve: count=2, threshold reached → stage approved, ability runs.
+		$this->register_no_op_ability( 'mstage/parallel' );
+		$ok = $service->approve( $id, $u2 );
+		$this->assertTrue( true === $ok );
+		$row = $repo->find( $id );
+		$this->assertSame( 'approved', $row['status'] );
+	}
+
+	public function test_required_user_id_pins_stage_to_specific_approver(): void {
+		$pinned = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		$other  = self::factory()->user->create( array( 'role' => 'administrator' ) );
+
+		$log_id  = $this->seed_log_row( 'mstage/pinned' );
+		$service = new ApprovalService();
+		$id      = $service->request(
+			'mstage/pinned',
+			new \stdClass(),
+			'inv-pinned',
+			$log_id,
+			array(
+				array(
+					'cap'     => 'manage_abilityguard_approvals',
+					'user_id' => $pinned,
+				),
+			)
+		);
+
+		$err = $service->approve( $id, $other );
+		$this->assertTrue( is_wp_error( $err ) );
+		$this->assertSame( 'abilityguard_approve_wrong_user', $err->get_error_code() );
+
+		$this->register_no_op_ability( 'mstage/pinned' );
+		$ok = $service->approve( $id, $pinned );
+		$this->assertTrue( true === $ok );
+	}
+
 	public function test_capability_check_uses_the_active_stages_cap(): void {
 		$log_id  = $this->seed_log_row( 'mstage/cap' );
 		$service = new ApprovalService();

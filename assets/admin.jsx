@@ -1185,11 +1185,14 @@ function ApprovalsView({ store, focusApprovalId = null }) {
   const [selected, setSelected] = React.useState(new Set());
   const [bulkActing, setBulkActing] = React.useState(false);
   const [filterText, setFilterText] = React.useState("");
+  const [hasMore, setHasMore] = React.useState(false);
+  const [loadingMore, setLoadingMore] = React.useState(false);
 
+  const PAGE_SIZE = 100;
   const load = React.useCallback(() => {
     setLoading(true);
     setError(null);
-    fetch(restUrl("approval", { status: "pending", per_page: 100 }), {
+    fetch(restUrl("approval", { status: "pending", per_page: PAGE_SIZE }), {
       headers: { "X-WP-Nonce": BOOT.rest.nonce },
     })
       .then((r) => {
@@ -1199,7 +1202,9 @@ function ApprovalsView({ store, focusApprovalId = null }) {
       .then(({ ok, body }) => {
         setLoading(false);
         if (!ok) { setError(body?.message || "Failed to load approvals"); return; }
-        setApprovals(Array.isArray(body) ? body : []);
+        const arr = Array.isArray(body) ? body : [];
+        setApprovals(arr);
+        setHasMore(arr.length >= PAGE_SIZE);
       })
       .catch((e) => {
         setLoading(false);
@@ -1210,6 +1215,25 @@ function ApprovalsView({ store, focusApprovalId = null }) {
         }
       });
   }, []);
+
+  const loadMore = React.useCallback(() => {
+    if (!approvals || loadingMore) return;
+    setLoadingMore(true);
+    fetch(restUrl("approval", { status: "pending", per_page: PAGE_SIZE, offset: approvals.length }), {
+      headers: { "X-WP-Nonce": BOOT.rest.nonce },
+    })
+      .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
+      .then(({ ok, body }) => {
+        setLoadingMore(false);
+        if (!ok || !Array.isArray(body)) return;
+        const known = new Set(approvals.map((a) => a.id));
+        const fresh = body.filter((a) => !known.has(a.id));
+        if (fresh.length === 0) { setHasMore(false); return; }
+        setApprovals((prev) => prev ? prev.concat(fresh) : fresh);
+        if (body.length < PAGE_SIZE) setHasMore(false);
+      })
+      .catch(() => setLoadingMore(false));
+  }, [approvals, loadingMore]);
 
   React.useEffect(() => { load(); }, [load]);
 
@@ -1457,6 +1481,15 @@ function ApprovalsView({ store, focusApprovalId = null }) {
           >{acting[appr.id] ? "…" : "Reject"}</button>
         </div>
       ))}
+      {hasMore && !q && (
+        <div style={{ textAlign: "center", marginTop: 12 }}>
+          <button
+            className="btn btn-sm"
+            disabled={loadingMore}
+            onClick={loadMore}
+          >{loadingMore ? "Loading…" : "Load older approvals ↓"}</button>
+        </div>
+      )}
     </div>
   );
 }

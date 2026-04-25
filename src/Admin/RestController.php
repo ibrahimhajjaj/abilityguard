@@ -90,7 +90,7 @@ final class RestController {
 					'format'       => array(
 						'type'    => 'string',
 						'default' => 'csv',
-						'enum'    => array( 'csv', 'json' ),
+						'enum'    => array( 'csv', 'json', 'jsonl' ),
 					),
 					'limit'        => array(
 						'type'    => 'integer',
@@ -182,6 +182,16 @@ final class RestController {
 						'minimum' => 0,
 					),
 				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/health',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'permission_callback' => array( __CLASS__, 'check_perms' ),
+				'callback'            => array( __CLASS__, 'get_health' ),
 			)
 		);
 
@@ -416,6 +426,40 @@ final class RestController {
 			return new WP_REST_Response( '', 200 );
 		}
 
+		if ( 'jsonl' === $format ) {
+			// One JSON object per line. Bypasses the REST JSON serializer
+			// (which would wrap the whole response in another JSON layer)
+			// via the same rest_pre_serve_request short-circuit used for CSV.
+			$lines = array();
+			foreach ( $rows as $row ) {
+				$encoded = wp_json_encode( $row );
+				if ( false !== $encoded ) {
+					$lines[] = $encoded;
+				}
+			}
+			$body = implode( "\n", $lines ) . ( array() === $lines ? '' : "\n" );
+
+			add_filter(
+				'rest_pre_serve_request',
+				static function ( bool $served, $result ) use ( $body ): bool {
+					unset( $result );
+					if ( $served ) {
+						return $served;
+					}
+					if ( ! headers_sent() ) {
+						header( 'Content-Type: application/x-ndjson; charset=utf-8' );
+						header( 'Content-Disposition: attachment; filename="abilityguard-log.jsonl"' );
+					}
+					// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+					echo $body;
+					return true;
+				},
+				10,
+				2
+			);
+			return new WP_REST_Response( '', 200 );
+		}
+
 		// JSON path: REST stack handles serialisation; we just nudge the
 		// download filename header.
 		$response = new WP_REST_Response( $rows, 200 );
@@ -583,6 +627,42 @@ final class RestController {
 	 * GET /retention - return retention policy + last-prune metadata.
 	 *
 	 * @param \WP_REST_Request $req Unused - included for REST route handler signature.
+	 */
+	/**
+	 * GET /health - operational metrics.
+	 *
+	 * @param \WP_REST_Request $req Unused.
+	 */
+	public static function get_health( WP_REST_Request $req ): WP_REST_Response { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+		global $wpdb;
+		$log_table       = \AbilityGuard\Installer::table( 'log' );
+		$approvals_table = \AbilityGuard\Installer::table( 'approvals' );
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$pending_logs      = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$log_table} WHERE status = 'pending'" );
+		$pending_approvals = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$approvals_table} WHERE status = 'pending'" );
+		$total_logs        = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$log_table}" );
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		return new WP_REST_Response(
+			array(
+				'ok'                => true,
+				'version'           => defined( 'ABILITYGUARD_VERSION' ) ? ABILITYGUARD_VERSION : 'unknown',
+				'db_version'        => get_option( \AbilityGuard\Installer::DB_VERSION_OPTION, '0' ),
+				'total_log_rows'    => $total_logs,
+				'pending_log_rows'  => $pending_logs,
+				'pending_approvals' => $pending_approvals,
+				'last_pruned'       => get_option( 'abilityguard_last_pruned', null ),
+				'last_pruned_count' => (int) get_option( 'abilityguard_last_pruned_count', 0 ),
+				'multisite'         => function_exists( 'is_multisite' ) && is_multisite(),
+			),
+			200
+		);
+	}
+
+	/**
+	 * GET /retention - return retention policy + last-prune metadata.
+	 *
+	 * @param \WP_REST_Request $req Unused.
 	 */
 	public static function get_retention( WP_REST_Request $req ): WP_REST_Response { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
 		$svc         = new RetentionService();

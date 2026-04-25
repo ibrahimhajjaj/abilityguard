@@ -116,18 +116,38 @@ final class ApprovalService {
 			$cap = is_array( $stage ) && isset( $stage['cap'] ) && is_string( $stage['cap'] )
 				? $stage['cap']
 				: CapabilityManager::CAP;
+
+			// `required` accepts: int (quorum N), 'all' (every member must
+			// approve - requires `members`), 'any' (default, single approver).
+			$required_count = 1;
+			if ( is_array( $stage ) && isset( $stage['required'] ) ) {
+				$req = $stage['required'];
+				if ( is_int( $req ) && $req > 0 ) {
+					$required_count = $req;
+				} elseif ( 'all' === $req && isset( $stage['members'] ) && is_array( $stage['members'] ) ) {
+					$required_count = max( 1, count( $stage['members'] ) );
+				}
+			}
+
+			$required_user_id = is_array( $stage ) && isset( $stage['user_id'] )
+				? (int) $stage['user_id']
+				: null;
+
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 			$wpdb->insert(
 				$stage_table,
 				array(
-					'approval_id'  => $approval_id,
-					'stage_index'  => $idx,
-					'required_cap' => $cap,
-					'status'       => 0 === $idx ? 'waiting' : 'pending',
-					'decided_by'   => 0,
-					'decided_at'   => null,
+					'approval_id'      => $approval_id,
+					'stage_index'      => $idx,
+					'required_cap'     => $cap,
+					'required_user_id' => $required_user_id,
+					'required_count'   => $required_count,
+					'decision_count'   => 0,
+					'status'           => 0 === $idx ? 'waiting' : 'pending',
+					'decided_by'       => 0,
+					'decided_at'       => null,
 				),
-				array( '%d', '%d', '%s', '%s', '%d', '%s' )
+				array( '%d', '%d', '%s', null === $required_user_id ? '%s' : '%d', '%d', '%d', '%s', '%d', '%s' )
 			);
 		}
 
@@ -199,20 +219,39 @@ final class ApprovalService {
 			);
 		}
 
-		$required_cap = (string) $active_stage['required_cap'];
+		$required_cap     = (string) $active_stage['required_cap'];
+		$required_user_id = isset( $active_stage['required_user_id'] ) ? (int) $active_stage['required_user_id'] : 0;
+		$required_count   = max( 1, (int) ( $active_stage['required_count'] ?? 1 ) );
+
 		if ( ! user_can( $user_id, $required_cap ) ) {
 			return new WP_Error(
 				'abilityguard_approve_capability_missing',
 				sprintf( 'User %d does not have the %s capability.', $user_id, $required_cap )
 			);
 		}
+		if ( $required_user_id > 0 && $required_user_id !== $user_id ) {
+			return new WP_Error(
+				'abilityguard_approve_wrong_user',
+				sprintf( 'Stage requires user #%d; got #%d.', $required_user_id, $user_id )
+			);
+		}
 
-		$claimed = $this->claim_stage( $approval_id, (int) $active_stage['stage_index'], $user_id, 'approved' );
-		if ( ! $claimed ) {
+		// Parallel quorum: instead of one atomic flip to 'approved', increment
+		// decision_count atomically. The stage flips to 'approved' only when
+		// the count reaches required_count. Single-stage and 1-of-1 stages
+		// hit the threshold on the first approve and behave identically to
+		// the v1.1 path.
+		$reached = $this->record_stage_approval( $approval_id, (int) $active_stage['stage_index'], $user_id, $required_count );
+		if ( null === $reached ) {
 			return new WP_Error(
 				'abilityguard_stage_already_decided',
-				'Another approver already decided this stage.'
+				'Stage is no longer waiting.'
 			);
+		}
+		if ( false === $reached ) {
+			// Quorum not yet reached - don't advance, don't execute. Other
+			// approvers must still chime in.
+			return true;
 		}
 
 		$next_stage = $this->advance_to_next_stage( $approval_id, (int) $active_stage['stage_index'] );
@@ -293,6 +332,81 @@ final class ApprovalService {
 	 * @param string $status      'approved' | 'rejected'.
 	 *
 	 * @return bool True if this call won the race, false otherwise.
+	 */
+	/**
+	 * Record an approve vote on a stage. Atomically increments
+	 * `decision_count` only when the row is still 'waiting' - defeats the
+	 * race where two approvers click at the same instant. When the post-
+	 * increment count reaches `required_count`, the stage flips to
+	 * 'approved' and `decided_by` is set to the user who pushed it over
+	 * the threshold.
+	 *
+	 * @param int $approval_id    Approval row id.
+	 * @param int $stage_index    Index of the stage to vote on.
+	 * @param int $user_id        Voting user.
+	 * @param int $required_count Quorum threshold.
+	 *
+	 * @return bool|null `true` when this vote crossed the threshold (caller
+	 *                   should advance to next stage); `false` when the vote
+	 *                   was accepted but quorum not yet reached; `null` when
+	 *                   the stage is no longer 'waiting' (lost the race or
+	 *                   already finalised).
+	 */
+	private function record_stage_approval( int $approval_id, int $stage_index, int $user_id, int $required_count ): ?bool {
+		global $wpdb;
+		$table = Installer::table( 'approval_stages' );
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name from Installer::table().
+		// MySQL evaluates SET clauses left-to-right and later expressions see
+		// already-updated columns. Run the CASE assignments BEFORE the
+		// increment so they evaluate against the pre-update decision_count.
+		$rows = $wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$table}
+				   SET status     = CASE WHEN decision_count + 1 >= %d THEN %s ELSE status END,
+				       decided_by = CASE WHEN decision_count + 1 >= %d THEN %d ELSE decided_by END,
+				       decided_at = CASE WHEN decision_count + 1 >= %d THEN %s ELSE decided_at END,
+				       decision_count = decision_count + 1
+				 WHERE approval_id = %d
+				   AND stage_index = %d
+				   AND status = %s",
+				$required_count,
+				'approved',
+				$required_count,
+				$user_id,
+				$required_count,
+				current_time( 'mysql', true ),
+				$approval_id,
+				$stage_index,
+				'waiting'
+			)
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+		if ( ! is_int( $rows ) || $rows < 1 ) {
+			return null;
+		}
+
+		// Re-read to check if we crossed the threshold this round.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$status = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT status FROM {$table} WHERE approval_id = %d AND stage_index = %d",
+				$approval_id,
+				$stage_index
+			)
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		return 'approved' === (string) $status;
+	}
+
+	/**
+	 * Atomically flip a single stage row from 'waiting' to a new status.
+	 * Used by reject() to claim the active stage in one shot.
+	 *
+	 * @param int    $approval_id Approval id.
+	 * @param int    $stage_index Stage index.
+	 * @param int    $user_id     Deciding user.
+	 * @param string $status      New status.
 	 */
 	private function claim_stage( int $approval_id, int $stage_index, int $user_id, string $status ): bool {
 		global $wpdb;
@@ -388,11 +502,18 @@ final class ApprovalService {
 			return new WP_Error( 'abilityguard_no_active_stage', 'Approval has no waiting stage.' );
 		}
 
-		$required_cap = (string) $active_stage['required_cap'];
+		$required_cap     = (string) $active_stage['required_cap'];
+		$required_user_id = isset( $active_stage['required_user_id'] ) ? (int) $active_stage['required_user_id'] : 0;
 		if ( ! user_can( $user_id, $required_cap ) ) {
 			return new WP_Error(
 				'abilityguard_approve_capability_missing',
 				sprintf( 'User %d does not have the %s capability.', $user_id, $required_cap )
+			);
+		}
+		if ( $required_user_id > 0 && $required_user_id !== $user_id ) {
+			return new WP_Error(
+				'abilityguard_approve_wrong_user',
+				sprintf( 'Stage requires user #%d; got #%d.', $required_user_id, $user_id )
 			);
 		}
 

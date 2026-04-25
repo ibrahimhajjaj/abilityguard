@@ -22,7 +22,7 @@ namespace AbilityGuard;
 final class Installer {
 
 	public const DB_VERSION_OPTION = 'abilityguard_db_version';
-	public const DB_VERSION        = '4';
+	public const DB_VERSION        = '5';
 
 	/**
 	 * Activation hook.
@@ -250,11 +250,19 @@ final class Installer {
 		// approvals (default `safety.requires_approval = true`) write zero
 		// rows here and the existing approvals.status field tracks the
 		// whole decision - preserves v1.0 behavior exactly.
+		// `required_count` enables parallel ("N of M must approve") stages.
+		// `required_user_id` (nullable) pins a stage to a specific approver.
+		// When both required_cap and required_user_id are set, BOTH must match.
+		// `decision_count` tracks how many approves the stage has accumulated;
+		// stage advances only when decision_count >= required_count.
 		$sql[] = "CREATE TABLE {$approval_stages} (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			approval_id bigint(20) unsigned NOT NULL,
 			stage_index smallint(5) unsigned NOT NULL,
 			required_cap varchar(191) NOT NULL,
+			required_user_id bigint(20) unsigned NULL,
+			required_count smallint(5) unsigned NOT NULL DEFAULT 1,
+			decision_count smallint(5) unsigned NOT NULL DEFAULT 0,
 			status varchar(20) NOT NULL DEFAULT 'pending',
 			decided_by bigint(20) unsigned NOT NULL DEFAULT 0,
 			decided_at datetime NULL,

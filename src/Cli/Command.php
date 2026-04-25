@@ -78,6 +78,11 @@ final class Command {
 	 * [--format=<format>]
 	 * : Output format: table|csv|json|yaml. Default: table.
 	 *
+	 * [--diff]
+	 * : `show` only - render the captured snapshot's pre-state vs post-state
+	 *   diff, surface by surface. Lines starting with `*` indicate a changed
+	 *   key.
+	 *
 	 * @param array<int, string>   $args       Positional args.
 	 * @param array<string, mixed> $assoc_args Flags.
 	 */
@@ -400,7 +405,7 @@ final class Command {
 		foreach ( $rows as &$row ) {
 			$stages = $repo->find_stages( (int) $row['id'] );
 			if ( count( $stages ) > 1 ) {
-				$active     = null;
+				$active = null;
 				foreach ( $stages as $s ) {
 					if ( 'waiting' === $s['status'] ) {
 						$active = $s;
@@ -450,7 +455,7 @@ final class Command {
 		WP_CLI::line( '' );
 		WP_CLI::line( 'Stage chain:' );
 		foreach ( $stages as $s ) {
-			$marker = 'waiting' === $s['status'] ? '→' : '  ';
+			$marker  = 'waiting' === $s['status'] ? '→' : '  ';
 			$decided = ! empty( $s['decided_at'] )
 				? sprintf( ' (by user #%d at %s)', $s['decided_by'], $s['decided_at'] )
 				: '';
@@ -518,7 +523,68 @@ final class Command {
 			WP_CLI::error( "No invocation matched: {$reference}" );
 		}
 
+		// --diff: print surface-by-surface changes from the captured snapshot
+		// instead of the raw log row. Same data the admin Diff tab renders.
+		if ( ! empty( $assoc_args['diff'] ) ) {
+			$this->log_show_diff( (array) $row );
+			return;
+		}
+
 		$format = (string) ( $assoc_args['format'] ?? 'yaml' );
 		Utils\format_items( $format, array( $row ), array_keys( $row ) );
+	}
+
+	/**
+	 * Render the diff for a log row's snapshot - pre-state vs post-state per surface.
+	 *
+	 * @param array<string, mixed> $row Log row.
+	 */
+	private function log_show_diff( array $row ): void {
+		$invocation_id = (string) ( $row['invocation_id'] ?? '' );
+		if ( '' === $invocation_id ) {
+			WP_CLI::error( 'Log row has no invocation_id.' );
+		}
+		$store    = new \AbilityGuard\Snapshot\SnapshotStore();
+		$snapshot = $store->find_by_invocation_id( $invocation_id );
+		if ( null === $snapshot ) {
+			WP_CLI::error( 'No snapshot stored for this invocation - cannot diff.' );
+		}
+
+		$pre  = is_array( $snapshot['surfaces'] ?? null ) ? $snapshot['surfaces'] : array();
+		$post = is_array( $snapshot['post_state'] ?? null ) ? $snapshot['post_state'] : null;
+
+		WP_CLI::line( '' );
+		WP_CLI::line( sprintf( 'Diff for invocation %s', $invocation_id ) );
+		if ( null === $post ) {
+			WP_CLI::line( '(no post-state captured - showing pre-state only)' );
+		}
+
+		foreach ( $pre as $surface => $pre_data ) {
+			if ( ! is_array( $pre_data ) ) {
+				continue;
+			}
+			WP_CLI::line( '' );
+			WP_CLI::line( "[{$surface}]" );
+			$post_data = is_array( $post ) && isset( $post[ $surface ] ) && is_array( $post[ $surface ] ) ? $post[ $surface ] : array();
+			$this->print_surface_diff( $pre_data, $post_data );
+		}
+	}
+
+	/**
+	 * Print a flat key/before/after table for a single surface.
+	 *
+	 * @param array<mixed> $pre  Pre-state slice.
+	 * @param array<mixed> $post Post-state slice (may be empty).
+	 */
+	private function print_surface_diff( array $pre, array $post ): void {
+		$keys = array_unique( array_merge( array_keys( $pre ), array_keys( $post ) ) );
+		foreach ( $keys as $key ) {
+			$before = $pre[ $key ] ?? null;
+			$after  = $post[ $key ] ?? null;
+			$bs     = is_scalar( $before ) ? (string) $before : wp_json_encode( $before );
+			$as     = is_scalar( $after ) ? (string) $after : wp_json_encode( $after );
+			$marker = $bs === $as ? ' ' : '*';
+			WP_CLI::line( sprintf( '  %s %s: %s -> %s', $marker, (string) $key, $bs, $as ) );
+		}
 	}
 }

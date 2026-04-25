@@ -2,7 +2,7 @@
 
 Snapshot + audit + rollback + approval middleware for the WordPress Abilities API.
 
-**Status:** v1.1-dev. extensibility for custom collectors, real byte-level file rollback via `safety.snapshot.files.strategy = 'full_content'`, full multisite support, and sequential multi-stage approval chains.
+**Status:** v1.2-dev. extensibility for custom collectors, real byte-level file rollback via `safety.snapshot.files.strategy = 'full_content'`, full multisite support, and sequential + parallel multi-stage approval chains (with optional per-stage user pinning).
 
 ## What it is
 
