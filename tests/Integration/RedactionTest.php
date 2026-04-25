@@ -38,6 +38,15 @@ final class RedactionTest extends WP_UnitTestCase {
 	protected function setUp(): void {
 		parent::setUp();
 		Installer::install();
+		// These tests were written for the v0.3 placeholder sentinel.
+		// v0.4 default switched to encrypted envelopes (see EncryptedRedactionTest).
+		// Pin the strategy back to placeholder for the legacy assertions.
+		add_filter( 'abilityguard_redaction_strategy', static fn() => 'placeholder' );
+	}
+
+	protected function tearDown(): void {
+		remove_all_filters( 'abilityguard_redaction_strategy' );
+		parent::tearDown();
 	}
 
 	/**

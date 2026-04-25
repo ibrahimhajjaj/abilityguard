@@ -25,6 +25,7 @@ final class ApprovalFlowTest extends WP_UnitTestCase {
 			$this->markTestSkipped( 'abilities-api plugin not loaded' );
 		}
 		Installer::install();
+		\AbilityGuard\Approval\CapabilityManager::grant_to_administrators();
 		$this->ensure_test_category();
 	}
 
@@ -246,8 +247,10 @@ final class ApprovalFlowTest extends WP_UnitTestCase {
 		$approval_id = (int) $result->get_error_data()['approval_id'];
 		$log_id      = (int) $result->get_error_data()['log_id'];
 
+		// User 2 needs the approval capability to reject.
+		$approver_id   = self::factory()->user->create( array( 'role' => 'administrator' ) );
 		$service       = new ApprovalService();
-		$reject_result = $service->reject( $approval_id, 2 );
+		$reject_result = $service->reject( $approval_id, $approver_id );
 
 		$this->assertTrue( $reject_result, 'reject() should return true on success.' );
 

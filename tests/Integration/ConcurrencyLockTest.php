@@ -94,6 +94,9 @@ final class ConcurrencyLockTest extends WP_UnitTestCase {
 		if ( ! function_exists( 'wp_register_ability' ) ) {
 			$this->markTestSkipped( 'abilities-api plugin not loaded' );
 		}
+		if ( ! class_exists( '\mysqli' ) ) {
+			$this->markTestSkipped( 'mysqli ext required for cross-connection lock test' );
+		}
 
 		$ability_name = 'abilityguard-lock-tests/serialised-write';
 		$post_id      = self::factory()->post->create();
@@ -127,12 +130,24 @@ final class ConcurrencyLockTest extends WP_UnitTestCase {
 		$ability = wp_get_ability( $ability_name );
 		$this->assertNotNull( $ability );
 
-		// Manually acquire the lock on this connection to simulate a concurrent holder.
+		// Hold the lock on a SEPARATE MySQL connection so the wrapper's
+		// $wpdb-based acquire sees it as contested (MySQL GET_LOCK is
+		// re-entrant per connection but blocks across connections).
 		$spec     = array(
 			'post_meta' => array( $post_id => array( '_ag_lock_val' ) ),
 		);
 		$lock_key = Lock::key_for_spec( $spec );
-		$this->assertTrue( Lock::acquire( $lock_key, 0 ), 'We must be able to grab the lock ourselves first.' );
+
+		$other = new \mysqli( DB_HOST, DB_USER, DB_PASSWORD, DB_NAME );
+		if ( $other->connect_errno ) {
+			$this->markTestSkipped( 'Could not open a second MySQL connection: ' . $other->connect_error );
+		}
+		$stmt = $other->prepare( 'SELECT GET_LOCK(?, 0)' );
+		$stmt->bind_param( 's', $lock_key );
+		$stmt->execute();
+		$got = $stmt->get_result()->fetch_row()[0] ?? null;
+		$stmt->close();
+		$this->assertSame( '1', (string) $got, 'External connection must hold the lock first.' );
 
 		try {
 			$result = $ability->execute( array( 'post_id' => $post_id ) );
@@ -152,7 +167,11 @@ final class ConcurrencyLockTest extends WP_UnitTestCase {
 			$rows = $logs->list( array( 'ability_name' => $ability_name ) );
 			$this->assertCount( 0, $rows, 'No audit row must be written on lock timeout.' );
 		} finally {
-			Lock::release( $lock_key );
+			$rel = $other->prepare( 'SELECT RELEASE_LOCK(?)' );
+			$rel->bind_param( 's', $lock_key );
+			$rel->execute();
+			$rel->close();
+			$other->close();
 		}
 	}
 

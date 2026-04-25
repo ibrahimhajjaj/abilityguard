@@ -134,7 +134,7 @@ trait RestHelpers {
 		$table = Installer::table( 'snapshots' );
 
 		$surfaces = array( 'options' => array( 'blogname' => 'Test Site' ) );
-		$json     = wp_json_encode( $surfaces );
+		$json     = \AbilityGuard\Support\Json::encode_compressed( $surfaces );
 
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery
 		$wpdb->insert(
