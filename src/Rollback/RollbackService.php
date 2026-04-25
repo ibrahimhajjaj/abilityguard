@@ -11,8 +11,11 @@ namespace AbilityGuard\Rollback;
 
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Snapshot\Collector\CollectorInterface;
+use AbilityGuard\Snapshot\Collector\FilesCollector;
 use AbilityGuard\Snapshot\Collector\OptionsCollector;
 use AbilityGuard\Snapshot\Collector\PostMetaCollector;
+use AbilityGuard\Snapshot\Collector\TaxonomyCollector;
+use AbilityGuard\Snapshot\Collector\UserRoleCollector;
 use AbilityGuard\Snapshot\SnapshotStore;
 use WP_Error;
 
@@ -37,6 +40,9 @@ final class RollbackService {
 			$this->collectors = array(
 				'post_meta' => new PostMetaCollector(),
 				'options'   => new OptionsCollector(),
+				'taxonomy'  => new TaxonomyCollector(),
+				'user_role' => new UserRoleCollector(),
+				'files'     => new FilesCollector(),
 			);
 		}
 	}

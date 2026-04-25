@@ -11,8 +11,11 @@ namespace AbilityGuard\Snapshot;
 
 use AbilityGuard\Contracts\SnapshotServiceInterface;
 use AbilityGuard\Snapshot\Collector\CollectorInterface;
+use AbilityGuard\Snapshot\Collector\FilesCollector;
 use AbilityGuard\Snapshot\Collector\OptionsCollector;
 use AbilityGuard\Snapshot\Collector\PostMetaCollector;
+use AbilityGuard\Snapshot\Collector\TaxonomyCollector;
+use AbilityGuard\Snapshot\Collector\UserRoleCollector;
 use AbilityGuard\Support\Hash;
 
 /**
@@ -43,6 +46,9 @@ final class SnapshotService implements SnapshotServiceInterface {
 			$this->collectors = array(
 				'post_meta' => new PostMetaCollector(),
 				'options'   => new OptionsCollector(),
+				'taxonomy'  => new TaxonomyCollector(),
+				'user_role' => new UserRoleCollector(),
+				'files'     => new FilesCollector(),
 			);
 		}
 	}
