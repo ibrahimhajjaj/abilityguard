@@ -72,9 +72,10 @@ final class AbilityWrapper {
 			// Advisory lock: serialise all invocations that share the same
 			// snapshot surfaces so capture+execute is atomic per surface set.
 			// ---------------------------------------------------------------
-			$lock_key     = null;
-			$lock_timeout = $this->resolve_lock_timeout();
-			$has_spec     = ! empty( $this->safety['snapshot'] );
+			$lock_key       = null;
+			$lock_inherited = false;
+			$lock_timeout   = $this->resolve_lock_timeout();
+			$has_spec       = ! empty( $this->safety['snapshot'] );
 
 			if ( $has_spec && $lock_timeout >= 0 ) {
 				$resolved_spec = $this->resolve_spec_for_lock( $input );
@@ -82,7 +83,14 @@ final class AbilityWrapper {
 				if ( array() !== $resolved_spec ) {
 					$lock_key = Lock::key_for_spec( $resolved_spec );
 
-					if ( ! Lock::acquire( $lock_key, $lock_timeout ) ) {
+					// Lock re-entrancy via parent_invocation_id. When
+					// THIS invocation is nested inside an ancestor that already
+					// holds the lock for the same surface set, treat it as
+					// inherited rather than blocking on ourselves. We never
+					// release inherited locks - the ancestor owns the lifetime.
+					if ( null !== $parent_invocation_id && Lock::is_held( $lock_key ) ) {
+						$lock_inherited = true;
+					} elseif ( ! Lock::acquire( $lock_key, $lock_timeout ) ) {
 						// Another invocation holds the lock - reject immediately.
 						// No log row, no snapshot.
 						return new WP_Error(
@@ -121,10 +129,10 @@ final class AbilityWrapper {
 				);
 
 				// Release lock before returning - no execution will follow.
-				if ( null !== $lock_key ) {
+				if ( null !== $lock_key && ! $lock_inherited ) {
 					Lock::release( $lock_key );
-					$lock_key = null;
 				}
+				$lock_key = null;
 
 				$approval_service = new ApprovalService();
 				$approval_id      = $approval_service->request( $this->ability_name, $input, $invocation_id, $log_id );
@@ -300,7 +308,7 @@ final class AbilityWrapper {
 				}
 				return $result;
 			} finally {
-				if ( null !== $lock_key ) {
+				if ( null !== $lock_key && ! $lock_inherited ) {
 					Lock::release( $lock_key );
 				}
 			}

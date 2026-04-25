@@ -230,6 +230,8 @@ function renderWalkedValue(val) {
 /* ---- App store ---- */
 function useStore() {
   const [rows, setRows] = React.useState(ALL_ROWS);
+  const [loadingMore, setLoadingMore] = React.useState(false);
+  const [hasMore, setHasMore] = React.useState(BASE_ROWS.length >= 200);
   const [view, setView] = React.useState({ name: "list", id: null });
   const [tokens, setTokens] = React.useState([]);
   const [query, setQuery] = React.useState("");
@@ -380,6 +382,29 @@ function useStore() {
 
   const clearSelection = () => setSelectedIds(new Set());
 
+  const loadMore = React.useCallback(() => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    const offset = rows.length;
+    fetch(restUrl("log", { per_page: 200, offset }), { headers: { "X-WP-Nonce": BOOT.rest.nonce } })
+      .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
+      .then(({ ok, body }) => {
+        setLoadingMore(false);
+        if (!ok || !Array.isArray(body)) return;
+        const knownIds = new Set(rows.map((r) => r.id));
+        const fresh = body
+          .filter((raw) => !knownIds.has(Number(raw.id)))
+          .map((raw) => adaptRow(raw, NOW_MS));
+        if (fresh.length === 0) {
+          setHasMore(false);
+          return;
+        }
+        setRows((rs) => rs.concat(fresh));
+        if (body.length < 200) setHasMore(false);
+      })
+      .catch(() => setLoadingMore(false));
+  }, [rows, loadingMore, hasMore]);
+
   return {
     rows, setRows, view, setView,
     tokens, setTokens, query, setQuery,
@@ -394,6 +419,7 @@ function useStore() {
     performBulkRollback,
     selectedIds, toggleSelectId, clearSelection,
     bulkErrorsModal, setBulkErrorsModal,
+    loadMore, loadingMore, hasMore,
   };
 }
 
@@ -887,6 +913,21 @@ function ListScreen({ store }) {
               <div className="hy-stream-head dim">
                 <div className="hy-stream-head-left">
                   <span>{flatIds.length} rows visible · {store.filtered.length.toLocaleString()} match filters</span>
+                  <span style={{ marginLeft: 12 }}>
+                    <a
+                      href={restUrl("log/export", { format: "csv", _wpnonce: BOOT.rest.nonce })}
+                      className="btn-link"
+                      style={{ fontSize: 11 }}
+                      title="Download all matching rows as CSV"
+                    >Export CSV</a>
+                    <span className="dim" style={{ margin: "0 6px" }}>·</span>
+                    <a
+                      href={restUrl("log/export", { format: "json", _wpnonce: BOOT.rest.nonce })}
+                      className="btn-link"
+                      style={{ fontSize: 11 }}
+                      title="Download all matching rows as JSON"
+                    >Export JSON</a>
+                  </span>
                 </div>
                 <div className="hy-jumpbar">
                   <button className="hy-jump-step" onClick={() => stepDate(-1)} aria-label="Older day" title="Older day">‹</button>
@@ -1000,6 +1041,21 @@ function ListScreen({ store }) {
                       </div>
                     </div>
                   )}
+
+                  {daysShown >= allGroups.length && store.hasMore && (
+                    <div className="hy-load-more-wrap">
+                      <button
+                        className="btn hy-load-more-btn"
+                        disabled={store.loadingMore}
+                        onClick={store.loadMore}
+                      >
+                        {store.loadingMore ? "Loading older invocations…" : "Fetch older invocations from server ↓"}
+                      </button>
+                      <div className="dim hy-load-more-hint" style={{ fontSize: 11.5 }}>
+                        showing {store.rows.length.toLocaleString()} loaded · server has more
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </main>
@@ -1048,6 +1104,8 @@ function ApprovalsView({ store }) {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
   const [acting, setActing] = React.useState({}); // id -> true
+  const [selected, setSelected] = React.useState(new Set());
+  const [bulkActing, setBulkActing] = React.useState(false);
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -1075,6 +1133,51 @@ function ApprovalsView({ store }) {
   }, []);
 
   React.useEffect(() => { load(); }, [load]);
+
+  const bulkAct = (action) => {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    setBulkActing(true);
+    fetch(restUrl("approval/bulk"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-WP-Nonce": BOOT.rest.nonce },
+      body: JSON.stringify({ ids, action }),
+    })
+      .then((r) => r.json().then((j) => ({ ok: r.ok, body: j })))
+      .then(({ ok, body }) => {
+        setBulkActing(false);
+        if (!ok) {
+          store.pushToast({ kind: "error", title: `Bulk ${action} failed`, body: body?.message || "Unknown error", duration: 5000 });
+          return;
+        }
+        const ok_count = (body.succeeded || []).length;
+        const fail_count = (body.failed || []).length;
+        store.pushToast({
+          kind: fail_count === 0 ? "success" : "error",
+          title: `Bulk ${action}: ${ok_count} ok${fail_count ? `, ${fail_count} failed` : ""}`,
+          body: fail_count ? (body.failed[0]?.message || "") : `#${ok_count} approval(s) ${action}d`,
+          duration: 4000,
+        });
+        const ok_set = new Set(body.succeeded || []);
+        setApprovals((prev) => prev ? prev.filter((a) => !ok_set.has(a.id)) : prev);
+        setSelected(new Set());
+      })
+      .catch((e) => {
+        setBulkActing(false);
+        store.pushToast({ kind: "error", title: `Bulk ${action} failed`, body: String(e), duration: 5000 });
+      });
+  };
+
+  const toggleOne = (id) => setSelected((s) => {
+    const x = new Set(s);
+    if (x.has(id)) x.delete(id); else x.add(id);
+    return x;
+  });
+  const toggleAll = () => setSelected((s) => {
+    if (!approvals) return s;
+    if (s.size === approvals.length) return new Set();
+    return new Set(approvals.map((a) => a.id));
+  });
 
   const act = (id, action) => {
     setActing((a) => ({ ...a, [id]: true }));
@@ -1124,11 +1227,35 @@ function ApprovalsView({ store }) {
     );
   }
 
+  const allSelected = approvals.length > 0 && selected.size === approvals.length;
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <span className="dim" style={{ fontSize: 12 }}>{approvals.length} pending</span>
+        <input
+          type="checkbox"
+          checked={allSelected}
+          onChange={toggleAll}
+          aria-label="Select all approvals"
+          title="Select all"
+          style={{ marginRight: 6 }}
+        />
+        <span className="dim" style={{ fontSize: 12 }}>{approvals.length} pending{selected.size > 0 ? ` · ${selected.size} selected` : ""}</span>
         <button className="btn-link" style={{ fontSize: 12 }} onClick={load}>Refresh</button>
+        {selected.size > 0 && (
+          <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <button
+              className="btn btn-sm"
+              disabled={bulkActing}
+              onClick={() => bulkAct("approve")}
+            >{bulkActing ? "…" : `Approve ${selected.size}`}</button>
+            <button
+              className="btn btn-sm btn-danger"
+              disabled={bulkActing}
+              onClick={() => bulkAct("reject")}
+            >{bulkActing ? "…" : `Reject ${selected.size}`}</button>
+          </span>
+        )}
       </div>
       {approvals.map((appr) => (
         <div key={appr.id} style={{
@@ -1136,6 +1263,12 @@ function ApprovalsView({ store }) {
           borderRadius: "var(--radius)", padding: "12px 16px", marginBottom: 8,
           display: "flex", alignItems: "center", gap: 12,
         }}>
+          <input
+            type="checkbox"
+            checked={selected.has(appr.id)}
+            onChange={() => toggleOne(appr.id)}
+            aria-label={`Select approval ${appr.id}`}
+          />
           <div style={{ flex: 1 }}>
             <div style={{ fontWeight: 600, fontSize: 13 }} className="mono">{appr.ability_name}</div>
             <div className="dim" style={{ fontSize: 11.5, marginTop: 2 }}>
@@ -1146,12 +1279,12 @@ function ApprovalsView({ store }) {
           </div>
           <button
             className="btn btn-sm"
-            disabled={!!acting[appr.id]}
+            disabled={!!acting[appr.id] || bulkActing}
             onClick={() => act(appr.id, "approve")}
           >{acting[appr.id] ? "…" : "Approve"}</button>
           <button
             className="btn btn-sm btn-danger"
-            disabled={!!acting[appr.id]}
+            disabled={!!acting[appr.id] || bulkActing}
             onClick={() => act(appr.id, "reject")}
           >{acting[appr.id] ? "…" : "Reject"}</button>
         </div>

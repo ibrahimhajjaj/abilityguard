@@ -120,6 +120,19 @@ final class Lock {
 	}
 
 	/**
+	 * Whether this process currently holds a given lock key.
+	 *
+	 * Lets nested ability calls detect that an ancestor invocation already
+	 * holds the lock for the same surface set so they can skip the acquire
+	 * (and the release) instead of deadlocking against themselves.
+	 *
+	 * @param string $key Full lock key (including prefix).
+	 */
+	public static function is_held( string $key ): bool {
+		return isset( self::$held[ $key ] );
+	}
+
+	/**
 	 * Reset the in-process held set. Test-only.
 	 *
 	 * @internal

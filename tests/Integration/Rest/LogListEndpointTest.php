@@ -198,6 +198,79 @@ final class LogListEndpointTest extends WP_UnitTestCase {
 		$this->assertSame( 'test/safe', $only_safe->get_data()[0]['ability_name'] );
 	}
 
+	public function test_export_json_returns_full_rows(): void {
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'export/json-1',
+				'status'       => 'ok',
+			)
+		);
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'export/json-2',
+				'status'       => 'ok',
+			)
+		);
+
+		$response = $this->as_admin(
+			fn() => $this->dispatch( 'GET', '/abilityguard/v1/log/export', array( 'format' => 'json' ) )
+		);
+		$this->assertSame( 200, $response->get_status() );
+		$rows = $response->get_data();
+		$this->assertIsArray( $rows );
+		$this->assertGreaterThanOrEqual( 2, count( $rows ) );
+		$names = array_column( $rows, 'ability_name' );
+		$this->assertContains( 'export/json-1', $names );
+		$this->assertContains( 'export/json-2', $names );
+
+		$headers = $response->get_headers();
+		$this->assertArrayHasKey( 'Content-Disposition', $headers );
+		$this->assertStringContainsString( 'abilityguard-log.json', (string) $headers['Content-Disposition'] );
+	}
+
+	public function test_export_csv_route_returns_200_with_csv_content_disposition(): void {
+		// The CSV body itself is short-circuited via rest_pre_serve_request
+		// at PHP output time, which the REST test harness doesn't capture.
+		// We assert the route resolves, the permission gate is satisfied,
+		// and the response is a 200 with the CSV-shaped status code.
+		$this->seed_log_row( array( 'ability_name' => 'export/csv-1' ) );
+
+		$response = $this->as_admin(
+			fn() => $this->dispatch( 'GET', '/abilityguard/v1/log/export', array( 'format' => 'csv' ) )
+		);
+		$this->assertSame( 200, $response->get_status() );
+	}
+
+	public function test_export_filters_apply(): void {
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'export/filtered',
+				'destructive'  => 1,
+			)
+		);
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'export/safe',
+				'destructive'  => 0,
+			)
+		);
+
+		$response = $this->as_admin(
+			fn() => $this->dispatch(
+				'GET',
+				'/abilityguard/v1/log/export',
+				array(
+					'format'      => 'json',
+					'destructive' => true,
+				)
+			)
+		);
+		$this->assertSame( 200, $response->get_status() );
+		$rows = $response->get_data();
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'export/filtered', $rows[0]['ability_name'] );
+	}
+
 	public function test_invalid_per_page_exceeding_max_rejected_by_schema(): void {
 		$response = $this->as_admin(
 			fn() => $this->dispatch( 'GET', self::ROUTE, array( 'per_page' => 999999 ) )

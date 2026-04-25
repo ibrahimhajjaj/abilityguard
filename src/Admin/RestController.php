@@ -81,6 +81,36 @@ final class RestController {
 
 		register_rest_route(
 			self::NAMESPACE,
+			'/log/export',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'permission_callback' => array( __CLASS__, 'check_perms' ),
+				'callback'            => array( __CLASS__, 'export_log' ),
+				'args'                => array(
+					'format'       => array(
+						'type'    => 'string',
+						'default' => 'csv',
+						'enum'    => array( 'csv', 'json' ),
+					),
+					'limit'        => array(
+						'type'    => 'integer',
+						'default' => 5000,
+						'minimum' => 1,
+						'maximum' => 50000,
+					),
+					'status'       => array( 'type' => 'string' ),
+					'ability_name' => array( 'type' => 'string' ),
+					'caller_id'    => array( 'type' => 'string' ),
+					'destructive'  => array(
+						'type'              => 'boolean',
+						'sanitize_callback' => 'rest_sanitize_boolean',
+					),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
 			'/log/(?P<id>\d+)',
 			array(
 				'methods'             => WP_REST_Server::READABLE,
@@ -167,6 +197,28 @@ final class RestController {
 
 		register_rest_route(
 			self::NAMESPACE,
+			'/approval/bulk',
+			array(
+				'methods'             => WP_REST_Server::CREATABLE,
+				'permission_callback' => array( __CLASS__, 'check_approval_perms' ),
+				'callback'            => array( __CLASS__, 'do_bulk_approval' ),
+				'args'                => array(
+					'ids'    => array(
+						'type'     => 'array',
+						'required' => true,
+						'items'    => array( 'type' => 'integer' ),
+					),
+					'action' => array(
+						'type'     => 'string',
+						'required' => true,
+						'enum'     => array( 'approve', 'reject' ),
+					),
+				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
 			'/approval/(?P<id>\d+)/approve',
 			array(
 				'methods'             => WP_REST_Server::CREATABLE,
@@ -234,6 +286,101 @@ final class RestController {
 		}
 
 		return new WP_REST_Response( $repo->list( $filters ), 200 );
+	}
+
+	/**
+	 * GET /log/export - flat CSV or JSON dump of audit rows.
+	 *
+	 * Honours the same status / ability_name / caller_id / destructive
+	 * filters as `/log`, plus `format` (csv|json) and `limit` (cap).
+	 *
+	 * @param \WP_REST_Request $req Request.
+	 */
+	public static function export_log( WP_REST_Request $req ): WP_REST_Response|WP_Error {
+		$format = (string) $req->get_param( 'format' );
+		$limit  = max( 1, min( 50000, (int) $req->get_param( 'limit' ) ) );
+
+		$filters = array(
+			'per_page' => $limit,
+			'offset'   => 0,
+		);
+		foreach ( array( 'status', 'ability_name', 'caller_id' ) as $key ) {
+			$value = $req->get_param( $key );
+			if ( is_string( $value ) && '' !== $value ) {
+				$filters[ $key ] = $value;
+			}
+		}
+		if ( null !== $req->get_param( 'destructive' ) ) {
+			$filters['destructive'] = (bool) $req->get_param( 'destructive' );
+		}
+
+		$rows = ( new LogRepository() )->list( $filters );
+
+		// We need raw CSV/JSON bytes, not a JSON-wrapped response. The REST
+		// stack will serialise WP_REST_Response bodies as JSON, so for CSV
+		// we hook rest_pre_serve_request to short-circuit serialisation.
+		if ( 'csv' === $format ) {
+			$columns = array(
+				'id',
+				'invocation_id',
+				'parent_invocation_id',
+				'ability_name',
+				'caller_type',
+				'caller_id',
+				'user_id',
+				'status',
+				'destructive',
+				'duration_ms',
+				'pre_hash',
+				'post_hash',
+				'snapshot_id',
+				'created_at',
+			);
+
+			$buffer = fopen( 'php://temp', 'r+' );
+			if ( false === $buffer ) {
+				return new WP_Error( 'abilityguard_export_buffer', 'Could not open temp buffer.', array( 'status' => 500 ) );
+			}
+			fputcsv( $buffer, $columns );
+			foreach ( $rows as $row ) {
+				$line = array();
+				foreach ( $columns as $column ) {
+					$line[] = isset( $row[ $column ] ) ? (string) $row[ $column ] : '';
+				}
+				fputcsv( $buffer, $line );
+			}
+			rewind( $buffer );
+			$csv = (string) stream_get_contents( $buffer );
+			fclose( $buffer );
+
+			add_filter(
+				'rest_pre_serve_request',
+				static function ( bool $served, $result ) use ( $csv ): bool {
+					if ( $served ) {
+						return $served;
+					}
+					if ( ! headers_sent() ) {
+						header( 'Content-Type: text/csv; charset=utf-8' );
+						header( 'Content-Disposition: attachment; filename="abilityguard-log.csv"' );
+					}
+					// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+					echo $csv;
+					return true;
+				},
+				10,
+				2
+			);
+
+			// Returning an empty 200 response satisfies the route signature;
+			// rest_pre_serve_request above replaces the body with raw CSV.
+			return new WP_REST_Response( '', 200 );
+		}
+
+		// JSON path: REST stack handles serialisation; we just nudge the
+		// download filename header.
+		$response = new WP_REST_Response( $rows, 200 );
+		$response->header( 'Content-Disposition', 'attachment; filename="abilityguard-log.json"' );
+		return $response;
 	}
 
 	/**
@@ -438,6 +585,72 @@ final class RestController {
 			array(
 				'ok'          => true,
 				'approval_id' => $id,
+			),
+			200
+		);
+	}
+
+	/**
+	 * POST /approval/bulk - approve or reject many at once.
+	 *
+	 * Body: `{ "ids": [int], "action": "approve"|"reject" }`. Cap of 100 ids
+	 * per request (mirrors `/rollback/bulk`'s 500 cap but tighter - approval
+	 * decisions tend to fan out to user notifications).
+	 *
+	 * @param \WP_REST_Request $req Request.
+	 */
+	public static function do_bulk_approval( WP_REST_Request $req ): WP_REST_Response|WP_Error {
+		$raw_ids = $req->get_param( 'ids' );
+		$action  = (string) $req->get_param( 'action' );
+
+		if ( ! is_array( $raw_ids ) ) {
+			return new WP_Error( 'abilityguard_invalid_ids', 'ids must be an array of integers.', array( 'status' => 400 ) );
+		}
+		if ( count( $raw_ids ) > 100 ) {
+			return new WP_Error(
+				'abilityguard_bulk_limit_exceeded',
+				'Bulk approvals are capped at 100 ids per request.',
+				array( 'status' => 400 )
+			);
+		}
+
+		$ids = array_values(
+			array_unique(
+				array_filter(
+					array_map( 'intval', $raw_ids ),
+					static fn( int $i ): bool => $i > 0
+				)
+			)
+		);
+
+		$user_id = get_current_user_id();
+		$service = new ApprovalService();
+
+		$succeeded = array();
+		$failed    = array();
+
+		foreach ( $ids as $id ) {
+			$result = 'approve' === $action
+				? $service->approve( $id, $user_id )
+				: $service->reject( $id, $user_id );
+
+			if ( is_wp_error( $result ) ) {
+				$failed[] = array(
+					'approval_id' => $id,
+					'code'        => $result->get_error_code(),
+					'message'     => $result->get_error_message(),
+				);
+				continue;
+			}
+			$succeeded[] = $id;
+		}
+
+		return new WP_REST_Response(
+			array(
+				'action'    => $action,
+				'succeeded' => $succeeded,
+				'failed'    => $failed,
+				'total'     => count( $ids ),
 			),
 			200
 		);
