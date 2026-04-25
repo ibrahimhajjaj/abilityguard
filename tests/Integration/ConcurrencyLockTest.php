@@ -88,6 +88,46 @@ final class ConcurrencyLockTest extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Same-request re-acquire of a held key fails by default - defeats MySQL's
+	 * per-connection re-entrancy. Recursive same-surface invocations get the
+	 * contention they expect.
+	 */
+	public function test_same_process_reacquire_blocks_by_default(): void {
+		Lock::reset_for_tests();
+		$key = Lock::key_for_spec( array( 'options' => array( 're-entrant-guard-test' ) ) );
+
+		$first = Lock::acquire( $key, 0 );
+		$this->assertTrue( $first, 'First acquire must succeed.' );
+
+		$second = Lock::acquire( $key, 0 );
+		$this->assertFalse( $second, 'Second acquire on the same process must fail (re-entrancy guard).' );
+
+		Lock::release( $key );
+		$third = Lock::acquire( $key, 0 );
+		$this->assertTrue( $third, 'After release, the same process can re-acquire.' );
+		Lock::release( $key );
+	}
+
+	/**
+	 * The abilityguard_lock_reentrant filter restores MySQL-only re-entrant behavior.
+	 */
+	public function test_reentrant_filter_opts_back_to_mysql_only(): void {
+		Lock::reset_for_tests();
+		add_filter( 'abilityguard_lock_reentrant', '__return_true' );
+		try {
+			$key   = Lock::key_for_spec( array( 'options' => array( 're-entrant-opt-out' ) ) );
+			$first = Lock::acquire( $key, 0 );
+			$this->assertTrue( $first );
+			$second = Lock::acquire( $key, 0 );
+			$this->assertTrue( $second, 'With reentrant=true, same-process re-acquire succeeds.' );
+			Lock::release( $key );
+			Lock::release( $key );
+		} finally {
+			remove_filter( 'abilityguard_lock_reentrant', '__return_true' );
+		}
+	}
+
+	/**
 	 * Second invocation that finds the lock held returns WP_Error(429) with no log row.
 	 */
 	public function test_second_invocation_gets_lock_timeout_error(): void {
@@ -138,6 +178,7 @@ final class ConcurrencyLockTest extends WP_UnitTestCase {
 		);
 		$lock_key = Lock::key_for_spec( $spec );
 
+		// phpcs:ignore WordPress.DB.RestrictedClasses.mysql__mysqli, WordPress.DB.DirectDatabaseQuery
 		$other = new \mysqli( DB_HOST, DB_USER, DB_PASSWORD, DB_NAME );
 		if ( $other->connect_errno ) {
 			$this->markTestSkipped( 'Could not open a second MySQL connection: ' . $other->connect_error );

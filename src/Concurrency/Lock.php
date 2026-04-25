@@ -27,14 +27,39 @@ final class Lock {
 	private const PREFIX = 'abilityguard:';
 
 	/**
+	 * Keys held by THIS process. Used to defeat MySQL's per-connection
+	 * GET_LOCK re-entrancy: same-request recursive invocations on the same
+	 * surface should still see contention. Without this, a wrapped ability
+	 * that recursively invokes another wrapped ability sharing the surface
+	 * would get a "successful" acquire on both calls.
+	 *
+	 * Filterable via `abilityguard_lock_reentrant` (default false = guard on).
+	 *
+	 * @var array<string, true>
+	 */
+	private static array $held = array();
+
+	/**
 	 * Acquire a named advisory lock.
+	 *
+	 * Same-process re-entrancy is treated as contention by default. Pass the
+	 * `abilityguard_lock_reentrant` filter returning true to fall back to
+	 * MySQL-only behavior (re-entrant per connection).
 	 *
 	 * @param string $key             Full lock key (including prefix).
 	 * @param int    $timeout_seconds Seconds to wait. 0 = fail immediately.
 	 *
-	 * @return bool True when the lock was acquired; false on timeout.
+	 * @return bool True when the lock was acquired; false on timeout / re-entrant guard.
 	 */
 	public static function acquire( string $key, int $timeout_seconds = 5 ): bool {
+		$reentrant_ok = function_exists( 'apply_filters' )
+			? (bool) apply_filters( 'abilityguard_lock_reentrant', false )
+			: false;
+
+		if ( ! $reentrant_ok && isset( self::$held[ $key ] ) ) {
+			return false;
+		}
+
 		global $wpdb;
 
 		$timeout = max( 0, $timeout_seconds );
@@ -61,7 +86,11 @@ final class Lock {
 			return false;
 		}
 
-		return '1' === (string) $result;
+		$acquired = '1' === (string) $result;
+		if ( $acquired ) {
+			self::$held[ $key ] = true;
+		}
+		return $acquired;
 	}
 
 	/**
@@ -75,6 +104,8 @@ final class Lock {
 	 * @return bool True if the lock was released by this connection.
 	 */
 	public static function release( string $key ): bool {
+		unset( self::$held[ $key ] );
+
 		global $wpdb;
 
 		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- key is sha1-derived, never user input.
@@ -86,6 +117,15 @@ final class Lock {
 		);
 
 		return '1' === (string) $result;
+	}
+
+	/**
+	 * Reset the in-process held set. Test-only.
+	 *
+	 * @internal
+	 */
+	public static function reset_for_tests(): void {
+		self::$held = array();
 	}
 
 	/**
