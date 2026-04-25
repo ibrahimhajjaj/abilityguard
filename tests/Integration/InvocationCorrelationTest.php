@@ -154,7 +154,7 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 				'snapshot'    => array( 'options' => array( $option_name ) ),
 			)
 		);
-		$inner = $inner_wrapper->wrap( static fn() => 'inner-ok' );
+		$inner         = $inner_wrapper->wrap( static fn() => 'inner-ok' );
 
 		++self::$counter;
 		$outer_ability = 'corr-test/lock-outer-' . self::$counter;
@@ -167,7 +167,7 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 				'snapshot'    => array( 'options' => array( $option_name ) ),
 			)
 		);
-		$outer = $outer_wrapper->wrap(
+		$outer         = $outer_wrapper->wrap(
 			static function () use ( $inner ) {
 				$result = $inner( null );
 				return is_wp_error( $result ) ? $result : 'outer-ok';

@@ -337,6 +337,7 @@ final class RestController {
 				'created_at',
 			);
 
+			// phpcs:disable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- in-memory php://temp stream, not a real filesystem write.
 			$buffer = fopen( 'php://temp', 'r+' );
 			if ( false === $buffer ) {
 				return new WP_Error( 'abilityguard_export_buffer', 'Could not open temp buffer.', array( 'status' => 500 ) );
@@ -352,10 +353,12 @@ final class RestController {
 			rewind( $buffer );
 			$csv = (string) stream_get_contents( $buffer );
 			fclose( $buffer );
+			// phpcs:enable WordPress.WP.AlternativeFunctions.file_system_operations_fopen, WordPress.WP.AlternativeFunctions.file_system_operations_fclose
 
 			add_filter(
 				'rest_pre_serve_request',
 				static function ( bool $served, $result ) use ( $csv ): bool {
+					unset( $result );
 					if ( $served ) {
 						return $served;
 					}

@@ -26,8 +26,12 @@ Then use that category slug in every ability's `category` field. You can put bot
 ```php
 // (Assumes you've registered the 'my-plugin' category - see above.)
 wp_register_ability( 'my-plugin/do-something', array(
-    'category'    => 'my-plugin',
-    // ... other core ability keys ...
+    'label'               => 'Do something',
+    'description'         => 'Toggles my_plugin_setting.',
+    'category'            => 'my-plugin',
+    'input_schema'        => array( 'type' => 'object' ), // Abilities API requires this even when input is freeform.
+    'permission_callback' => static fn() => current_user_can( 'manage_options' ),
+    'execute_callback'    => static fn( $input ) => update_option( 'my_plugin_setting', 'on' ),
     'safety' => array(
         'destructive' => true,
         'snapshot'    => array(
@@ -57,6 +61,8 @@ wp eval '
 ```
 
 Same applies to direct PHP scripts run via cron, queue workers, or any context that doesn't pass through the REST stack.
+
+For multi-line tests or anything touching `AbilityGuard\` namespaced classes (`LogMeta`, `CriticalFileRegistry`, etc.), prefer `wp eval-file path/to/script.php` over inline `wp eval '...'`. Backslashes in fully-qualified class names don't survive most shells, and you'll get a confusing "critical error on this website" instead of a real error message.
 
 ---
 
