@@ -130,6 +130,74 @@ final class LogListEndpointTest extends WP_UnitTestCase {
 		$this->assertCount( 2, $data );
 	}
 
+	public function test_ability_name_filter_returns_only_matching_rows(): void {
+		$this->seed_log_row( array( 'ability_name' => 'plugin-a/do' ) );
+		$this->seed_log_row( array( 'ability_name' => 'plugin-b/do' ) );
+		$this->seed_log_row( array( 'ability_name' => 'plugin-a/do' ) );
+
+		$response = $this->as_admin(
+			fn() => $this->dispatch( 'GET', self::ROUTE, array( 'ability_name' => 'plugin-a/do' ) )
+		);
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertCount( 2, $data );
+		foreach ( $data as $row ) {
+			$this->assertSame( 'plugin-a/do', $row['ability_name'] );
+		}
+	}
+
+	public function test_caller_id_filter_returns_only_matching_rows(): void {
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'test/mcp-a',
+				'caller_type'  => 'mcp',
+				'caller_id'    => 'server-x',
+			)
+		);
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'test/mcp-b',
+				'caller_type'  => 'mcp',
+				'caller_id'    => 'server-y',
+			)
+		);
+
+		$response = $this->as_admin(
+			fn() => $this->dispatch( 'GET', self::ROUTE, array( 'caller_id' => 'server-x' ) )
+		);
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertCount( 1, $data );
+		$this->assertSame( 'server-x', $data[0]['caller_id'] );
+	}
+
+	public function test_destructive_filter_partitions_results(): void {
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'test/destr',
+				'destructive'  => 1,
+			)
+		);
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'test/safe',
+				'destructive'  => 0,
+			)
+		);
+
+		$only_destr = $this->as_admin(
+			fn() => $this->dispatch( 'GET', self::ROUTE, array( 'destructive' => true ) )
+		);
+		$only_safe  = $this->as_admin(
+			fn() => $this->dispatch( 'GET', self::ROUTE, array( 'destructive' => false ) )
+		);
+
+		$this->assertCount( 1, $only_destr->get_data() );
+		$this->assertSame( 'test/destr', $only_destr->get_data()[0]['ability_name'] );
+		$this->assertCount( 1, $only_safe->get_data() );
+		$this->assertSame( 'test/safe', $only_safe->get_data()[0]['ability_name'] );
+	}
+
 	public function test_invalid_per_page_exceeding_max_rejected_by_schema(): void {
 		$response = $this->as_admin(
 			fn() => $this->dispatch( 'GET', self::ROUTE, array( 'per_page' => 999999 ) )

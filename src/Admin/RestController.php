@@ -57,18 +57,24 @@ final class RestController {
 				'permission_callback' => array( __CLASS__, 'check_perms' ),
 				'callback'            => array( __CLASS__, 'list_log' ),
 				'args'                => array(
-					'per_page' => array(
+					'per_page'     => array(
 						'type'    => 'integer',
 						'default' => 50,
 						'minimum' => 1,
 						'maximum' => 500,
 					),
-					'offset'   => array(
+					'offset'       => array(
 						'type'    => 'integer',
 						'default' => 0,
 						'minimum' => 0,
 					),
-					'status'   => array( 'type' => 'string' ),
+					'status'       => array( 'type' => 'string' ),
+					'ability_name' => array( 'type' => 'string' ),
+					'caller_id'    => array( 'type' => 'string' ),
+					'destructive'  => array(
+						'type'              => 'boolean',
+						'sanitize_callback' => 'rest_sanitize_boolean',
+					),
 				),
 			)
 		);
@@ -205,10 +211,28 @@ final class RestController {
 			'per_page' => (int) $req->get_param( 'per_page' ),
 			'offset'   => (int) $req->get_param( 'offset' ),
 		);
-		$status  = $req->get_param( 'status' );
+
+		$status = $req->get_param( 'status' );
 		if ( is_string( $status ) && '' !== $status ) {
 			$filters['status'] = $status;
 		}
+
+		$ability_name = $req->get_param( 'ability_name' );
+		if ( is_string( $ability_name ) && '' !== $ability_name ) {
+			$filters['ability_name'] = $ability_name;
+		}
+
+		$caller_id = $req->get_param( 'caller_id' );
+		if ( is_string( $caller_id ) && '' !== $caller_id ) {
+			$filters['caller_id'] = $caller_id;
+		}
+
+		// `destructive` is tri-state: true | false | unset.
+		// Use has_param to distinguish "filter to non-destructive" from "no filter".
+		if ( null !== $req->get_param( 'destructive' ) ) {
+			$filters['destructive'] = (bool) $req->get_param( 'destructive' );
+		}
+
 		return new WP_REST_Response( $repo->list( $filters ), 200 );
 	}
 

@@ -22,6 +22,13 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `abilityguard_snapshot_meta( int $post_id, string[] $keys )` | 0.1 | Read current post_meta values matching the spec shape. |
 | `abilityguard_snapshot_options( string[] $keys )` | 0.1 | Read current option values matching the spec shape. |
 
+### PHP classes (public, namespaced)
+
+| Class | Since | Purpose |
+|---|---|---|
+| `AbilityGuard\Audit\LogMeta` | 0.6 | `LogMeta::set( $log_id, $key, $value )` and `LogMeta::get_all( $log_id, $key )` for reading/writing the `log_meta` extensible store |
+| `AbilityGuard\Snapshot\Collector\CriticalFileRegistry` | 0.7 | `add( $suffix )`, `remove( $suffix )`, `matches( $path )`, `all()` for managing the critical-file allowlist used by `FilesCollector::STRATEGY_CRITICAL_HASH` |
+
 ### Safety config keys (passed to `wp_register_ability` under `safety`)
 
 | Key | Since | Type |
@@ -32,9 +39,9 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `redact` | 0.3 | array - sub-keys: `input`, `result`, `surfaces` (each: string[] of dot-paths) |
 | `scrub` | 0.3 | callable - receives `(mixed $value, string $kind)`, returns redacted value |
 | `max_payload_bytes` | 0.3 | int - 0 disables truncation |
-| `skip_drift_check` | 0.3 | bool - currently read from `log_meta`, not yet from `safety` directly  |
+| `skip_drift_check` | 0.6 | bool - when true the wrapper auto-writes a `log_meta` row that RollbackService reads to bypass drift |
 | `lock_timeout` | 0.4 | int - seconds; 0 = fail fast; -1 = lock disabled |
-| `collectors` | - | reserved for v0.6, not yet wired |
+| `collectors` | - | reserved for a future minor, not yet wired |
 
 ### Snapshot surfaces (keys returned by the `snapshot` resolver)
 
@@ -44,7 +51,7 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `options` | 0.1 | `string[]` |
 | `taxonomy` | 0.2 | `array<int $post_id, string[] $taxonomy_names>` |
 | `user_role` | 0.2 | `int[]` |
-| `files` | 0.2 | `string[]` (read-only restore - fires `abilityguard_files_changed_since_snapshot`) |
+| `files` | 0.2 | `string[]` OR `{ paths: string[]\|Traversable, strategy?: 'mtime'\|'mtime_size'\|'critical_hash'\|'full_hash', exclude_dirs?: string[] }`. Read-only restore - fires `abilityguard_files_changed_since_snapshot` and `abilityguard_files_deleted_since_snapshot` |
 
 ### WordPress actions
 
@@ -54,6 +61,7 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `abilityguard_rollback` | 0.1 | `( $log, $snapshot, $drifted_surfaces = [] )` |
 | `abilityguard_rollback_drift` | 0.3 | `( $log, $snapshot, $drifted_surfaces )` |
 | `abilityguard_files_changed_since_snapshot` | 0.2 | `( string[] $changed_paths )` |
+| `abilityguard_files_deleted_since_snapshot` | 0.7 | `( string[] $deleted_paths )` - strict subset of changed paths: existed at snapshot, gone now |
 | `abilityguard_retention_prune` | 0.2 | `()` - daily WP cron hook running `RetentionService::prune()` |
 | `abilityguard_bulk_rollback_complete` | 0.4 | `( array $summary )` |
 | `abilityguard_approval_requested` | 0.5 | `( int $approval_id, string $ability_name, int $log_id, mixed $input, string $invocation_id )` |
@@ -76,6 +84,9 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `abilityguard_lock_timeout` | 0.4 | `5` | Default seconds to wait on advisory lock |
 | `abilityguard_lock_reentrant` | 0.5 | `false` | When true, re-entrant per-process lock acquires succeed (MySQL-only behavior) |
 | `abilityguard_can_approve` | 0.4 | `true` | Veto an approval decision: `( bool $can, array $approval_row, int $user_id ): bool` |
+| `abilityguard_files_default_strategy` | 0.7 | `'full_hash'` | Site-wide default detection strategy for `FilesCollector` |
+| `abilityguard_files_default_exclude_dirs` | 0.7 | backup-plugin paths | Substring-match excludes applied to every `FilesCollector::collect()` call |
+| `abilityguard_files_critical_suffixes` | 0.7 | `CriticalFileRegistry::all()` | Final say over which path suffixes are "critical" under `critical_hash` |
 
 ### REST endpoints (namespace `abilityguard/v1`)
 
@@ -116,6 +127,7 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 - Any `private`/`protected` method on any service class.
 - The schema of `wp_abilityguard_*` tables - read via `LogRepository` / `ApprovalRepository` / `SnapshotStore`. Direct SQL is not supported and may break.
 - Internal namespaces like `AbilityGuard\Support\Cipher` (the encryption envelope shape is internal - use `safety.scrub` if you need to influence redaction output).
+- `AbilityGuard\Registry\InvocationStack` is internal - read `parent_invocation_id` off the audit row instead.
 - The React app structure (`assets/admin.jsx`) - extend via REST + actions, not by patching the bundle.
 - `Lock::reset_for_tests()` and any other `*_for_tests` methods.
 

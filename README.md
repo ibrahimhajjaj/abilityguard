@@ -2,7 +2,7 @@
 
 Snapshot + audit + rollback + approval middleware for the WordPress Abilities API.
 
-**Status:** v0.2-dev. Not production ready.
+**Status:** v0.7-dev. Not production ready, but feature-complete for the snapshot/audit/rollback/approval core.
 
 ## What it is
 
@@ -37,18 +37,23 @@ wp_register_ability( 'my-plugin/update-product-price', array(
 ## What you get out of the box
 
 - **Pre + post snapshots.** Every safety-enabled invocation captures declared state before the callback and (on success) after - so the audit log can show a real diff, not just hashes.
-- **Audit log.** One row per invocation with ability name, caller (`rest|mcp|cli|internal|...`), `caller_id` (e.g. MCP server name when invoked through mcp-adapter), user, args, result, status, duration, pre/post hashes.
-- **One-click rollback.** Restore captured state from `post_meta`, `options`, taxonomy term assignments, user roles + caps. File-content rollback is intentionally out of scope (v0.2 fingerprints files and emits a `abilityguard_files_changed_since_snapshot` action; v0.3 may add real file restore).
-- **Approval queue.** When `safety.requires_approval => true`, the wrapper blocks execution, logs the row as `pending`, persists the input, and returns `WP_Error('abilityguard_pending_approval', 202)`. A human approves or rejects via wp-admin or `wp abilityguard approval`.
+- **Audit log.** One row per invocation with ability name, caller (`rest|mcp|cli|internal|...`), `caller_id` (e.g. MCP server name when invoked through mcp-adapter), user, args, result, status, duration, pre/post hashes, and `parent_invocation_id` for nested calls.
+- **One-click rollback.** Restore captured state from `post_meta`, `options`, taxonomy term assignments, user roles + caps. File contents are not rewritten - instead, `FilesCollector` does tiered drift detection (`mtime` / `mtime_size` / `critical_hash` / `full_hash`), fires `abilityguard_files_changed_since_snapshot` and `abilityguard_files_deleted_since_snapshot`, and pins the changed/deleted paths onto the log row as `files_changed_on_rollback` / `files_deleted_on_rollback` meta.
+- **Drift check on rollback.** Live state is hashed and compared to the snapshot's post-state before restoring; if they differ the rollback returns `abilityguard_rollback_drift` unless you pass `force=true` or set `safety.skip_drift_check = true` on the registration.
+- **Concurrency lock.** Capture + execute is serialised per surface set via a MySQL advisory lock so two simultaneous invocations don't capture each other's mid-states.
+- **Encrypted redaction.** `safety.redact` / `safety.scrub` and a global `abilityguard_redact_keys` filter scrub secrets out of `args_json` / `result_json` / snapshot surfaces. v0.4+ stores redacted values as AES-256-GCM envelopes so rollback can still restore them when the key is intact.
+- **Payload caps.** `args_json` and `result_json` are capped (defaults 64 KB / 128 KB, filterable per-ability) with an explicit truncation marker so a runaway ability can't blow up the audit table.
+- **Approval queue.** When `safety.requires_approval => true`, the wrapper blocks execution, logs the row as `pending`, persists the input, and returns `WP_Error('abilityguard_pending_approval', 202)`. A human approves or rejects via wp-admin, `wp abilityguard approval`, or REST.
+- **Invocation correlation.** Nested ability calls record a `parent_invocation_id`, so the admin UI shows a click-through "Invocation chain" linking parents and children.
 - **Retention.** Daily WP cron prunes old log rows (defaults: 30 days normal, 180 days destructive) and orphaned snapshots. Both windows are filterable.
 - **MCP client attribution.** When an ability is invoked via the WordPress MCP adapter, the audit row records which MCP server made the call.
 
 ## Surfaces (interfaces to your plugin)
 
 - **PHP API** - `wp_register_ability( $name, [ ..., 'safety' => [...] ] )` and helpers `abilityguard_rollback`, `abilityguard_snapshot_meta`, `abilityguard_snapshot_options`.
-- **REST** - `GET /abilityguard/v1/log`, `GET /log/<id>` (returns log row + decoded snapshot), `POST /rollback/<id>`.
+- **REST** - `GET /abilityguard/v1/log`, `GET /log/<id>` (returns log row + decoded snapshot + parent + children + log_meta), `POST /rollback/<id>`, `POST /rollback/bulk`, `GET /approval`, `POST /approval/<id>/approve`, `POST /approval/<id>/reject`, `GET /retention`.
 - **WP-CLI** - `wp abilityguard log list/show`, `wp abilityguard rollback <id>`, `wp abilityguard approval list/approve/reject <id>`, `wp abilityguard prune`.
-- **wp-admin** - Tools → AbilityGuard. Hybrid timeline + command-palette search + per-day pagination, snapshot drawer, JSON-highlighted Input/Result tabs, real rollback against the captured snapshot.
+- **wp-admin** - Tools → AbilityGuard. Hybrid timeline + command-palette search + per-day pagination, snapshot drawer, JSON-highlighted Input/Result tabs, "Invocation chain" navigation between parent and child invocations, "Rollback signals" card surfacing changed/deleted file paths, and real rollback against the captured snapshot.
 
 ## Documentation
 
@@ -93,7 +98,7 @@ The plugin's canonical slug is **`abilityguard`** (lowercase) - that's what the 
 
 Your local clone folder may be named `AbilityGuard/` (capital A) or `abilityguard/`; `.wp-env.json` mounts the working tree under `wp-content/plugins/abilityguard` regardless via `mappings`, so dependents that declare `Requires Plugins: abilityguard` activate cleanly in dev. The plugin is auto-activated on `wp-env start` via `lifecycleScripts.afterStart`.
 
-The integration suite is the primary correctness source - 54 tests covering installer schema, snapshot/audit/rollback round-trip, the approval queue, all five collectors, retention pruning, MCP identity, the post-state diff path, and both example plugins.
+The integration suite is the primary correctness source - 140 tests covering installer schema, snapshot/audit/rollback round-trip, drift detection, encrypted redaction, the approval queue, all five collectors (including the FilesCollector tiered detection strategies), retention pruning, MCP identity, the post-state diff path, parent/child invocation correlation, and both example plugins.
 
 If you use Claude Code worktrees, drop a local `phpcs.xml` (not committed) so PHPCS doesn't scan `.claude/`:
 
@@ -105,19 +110,18 @@ If you use Claude Code worktrees, drop a local `phpcs.xml` (not committed) so PH
 </ruleset>
 ```
 
-## Known limitations (v0.2)
+## Known limitations
 
-- **No concurrency lock around capture+execute.** Two simultaneous invocations of an ability touching the same surface (e.g. the same `post_meta` key) capture each other's mid-states; rollback restores to "the other invocation's output," not "before either ran." If your ability is expected to run concurrently against shared state, consider serialising at the application level. v0.4 may add advisory locking via `get_option`-based mutexes or the `wp_locks` API.
-- **No drift check on rollback (in v0.2).** Rollback blindly overwrites live state with the captured snapshot. If another plugin or user mutated the same surface after the snapshot was taken, those changes are clobbered. v0.3 adds a `pre_hash` drift check with a `--force` opt-out.
-- **No payload size or secret redaction (in v0.2).** `args_json`, `result_json`, and snapshot surfaces are stored verbatim. Don't pass secrets through ability inputs, and don't snapshot options containing large serialised blobs. v0.3 adds configurable size caps and a `safety.redact` / `safety.scrub` redaction layer.
-- **File-content rollback is intentionally out of scope.** `FilesCollector` captures sha256 fingerprints and emits `abilityguard_files_changed_since_snapshot` on restore, but doesn't write file contents back. If you need real file rollback, hook the action and implement your own restore.
+- **File-content rollback is intentionally out of scope.** `FilesCollector` captures fingerprints under one of four detection strategies and fires `abilityguard_files_changed_since_snapshot` / `abilityguard_files_deleted_since_snapshot` on restore, but doesn't write file contents back. RollbackService records the changed/deleted paths as `log_meta` so the audit trail and admin UI surface the drift, but if you need real file rollback hook the actions and implement your own restore.
+- **Multisite story is unverified.** Tables are `$wpdb->prefix`-scoped so per-site installs work, but network-level approval delegation and cross-site `caller_id` semantics haven't been designed yet.
+- **Approval queue is single-step.** Multi-stage approval (e.g. requester → reviewer → final approver) is not modeled. Each `requires_approval` ability has exactly one approve/reject decision.
 
 ## Schema
 
 Four tables, all prefixed `wp_abilityguard_`:
 
-- `log` - one row per invocation. `id, invocation_id, ability_name, caller_type, caller_id, user_id, args_json, result_json, status, destructive, duration_ms, pre_hash, post_hash, snapshot_id, created_at`.
-- `log_meta` - extensible key/value attached to a log row (reserved for v0.3+).
+- `log` - one row per invocation. `id, invocation_id, parent_invocation_id, ability_name, caller_type, caller_id, user_id, args_json, result_json, status, destructive, duration_ms, pre_hash, post_hash, snapshot_id, created_at`.
+- `log_meta` - extensible key/value attached to a log row. Currently used for `skip_drift_check`, `files_changed_on_rollback`, `files_deleted_on_rollback`. Read/write via `AbilityGuard\Audit\LogMeta`.
 - `snapshots` - gzipped pre-state and (when callback succeeds) post-state per invocation.
 - `approvals` - pending approval requests when `safety.requires_approval` is set.
 

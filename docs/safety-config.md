@@ -70,7 +70,8 @@ Same applies to direct PHP scripts run via cron, queue workers, or any context t
 | `redact` | `array` | `[]` | Per-kind paths to redact before logging. Shape: `['input' => [...], 'result' => [...], 'surfaces' => ['post_meta' => [...]]]`. See [Redaction](#redaction). |
 | `scrub` | `callable` | `null` | Full replace for redaction. Receives `($value, $kind)` where `$kind` is `'input'` or `'result'`. When set, `redact` is ignored for input/result logging. |
 | `max_payload_bytes` | `int` | filter-driven | Per-ability byte cap for args, result, and snapshot payloads. `0` = unlimited. See [Payload caps](#payload-caps). |
-| `skip_drift_check` | `bool` | `false` | **Note:** this key is documented as a planned per-registration override but is not yet wired from `safety` config into the audit row. In v0.3 the drift bypass is set via a `log_meta` row (`meta_key = skip_drift_check`, `meta_value = 1`). A `safety.skip_drift_check` shorthand is scheduled for v0.4. |
+| `skip_drift_check` | `bool` | `false` | When `true`, RollbackService bypasses the live-vs-snapshot post-state hash comparison and restores regardless. The `abilityguard_rollback_drift` action still fires for observability. AbilityGuard wires this into a `log_meta` row automatically - you don't need to write the meta yourself. |
+| `lock_timeout` | `int` | filter-driven (default `5`) | Per-ability seconds to wait for the per-surface MySQL advisory lock before refusing the invocation. Set to a negative value to disable locking entirely for this ability. |
 
 ---
 
@@ -217,25 +218,61 @@ wp_register_ability( 'acme-shop/update-product-price', array(
 
 ### `files`
 
-**Spec shape:** `string[]` (absolute filesystem paths)
+**Spec shape:** `string[]` of absolute paths, OR an array `{ paths, strategy?, exclude_dirs? }` for tier control. `paths` may be any `Traversable` so generators work for very large path universes.
 
 ```php
+// Simple form - string[] of paths.
 'files' => array(
     WP_CONTENT_DIR . '/uploads/my-plugin/export.csv',
 ),
+
+// Explicit form - choose a detection tier.
+'files' => array(
+    'paths'    => array( ABSPATH . '/.htaccess', ABSPATH . '/wp-config.php' ),
+    'strategy' => 'critical_hash',
+),
 ```
 
-**Captures:** for each path: `exists`, `sha256`, `size`, `mtime`.
+**Captures:** for each path: `exists`, `sha256` (only when the strategy hashes), `size`, `mtime`.
 
-**Does NOT restore file contents.** `FilesCollector::restore()` is a no-op. On rollback it fires `do_action( 'abilityguard_files_changed_since_snapshot', $changed_paths )` with paths whose sha256 differs from the captured state, so you can hook in your own restore logic.
+**Detection strategies** (lifted from SafeGuard's tiered scanner):
 
-If you need real file rollback, hook that action:
+| Strategy | Hashes | Use when |
+|---|---|---|
+| `mtime` | never | Cheapest. Catches naïve edits, misses content-preserving rsync/touch tricks. |
+| `mtime_size` | never | Better signal than mtime alone for very large path counts. |
+| `critical_hash` | only paths matching `CriticalFileRegistry::matches()` | Default-ish: hash the high-value files (`wp-config.php`, `.env`, `.htaccess`, anything plugins register), stat the rest. |
+| `full_hash` | every path | Most accurate, slowest. Default for back-compat. |
+
+Override the global default with the `abilityguard_files_default_strategy` filter.
+
+**`CriticalFileRegistry`.** Plugins can register additional critical-path matchers imperatively:
+
+```php
+use AbilityGuard\Snapshot\Collector\CriticalFileRegistry;
+
+CriticalFileRegistry::add( '/wp-config-sample.php' );
+CriticalFileRegistry::add( '.env.production' );
+```
+
+The `abilityguard_files_critical_suffixes` filter still wins for global overrides - the registry just seeds defaults.
+
+**Does NOT restore file contents.** `FilesCollector::restore()` is a no-op for content. On rollback it fires two actions:
+
+- `abilityguard_files_changed_since_snapshot` - paths whose state differs from the snapshot (any drift signal).
+- `abilityguard_files_deleted_since_snapshot` - paths that existed at snapshot time and are now gone (a strict subset of the above).
+
+`RollbackService` automatically pins both lists onto the log row as `files_changed_on_rollback` / `files_deleted_on_rollback` meta, and the admin UI surfaces them on the detail screen. If you also want to perform a real file restore, hook the actions:
 
 ```php
 add_action( 'abilityguard_files_changed_since_snapshot', function ( array $paths ): void {
     foreach ( $paths as $path ) {
         // restore from your own backup store
     }
+} );
+
+add_action( 'abilityguard_files_deleted_since_snapshot', function ( array $paths ): void {
+    // Notify oncall / re-create from a known good source.
 } );
 ```
 
@@ -345,24 +382,23 @@ Truncated snapshots cannot be reliably rolled back. If you see truncation notice
 
 Rollback normally compares live state to the post-invocation snapshot before restoring. If another process mutated the same surface after your ability ran, rollback aborts with `WP_Error( 'abilityguard_rollback_drift' )`.
 
-For idempotent or append-only operations where overwriting drifted state is safe, you can bypass the check:
-
-**Current mechanism (v0.3):** write a `log_meta` row after the invocation completes:
+For idempotent or append-only operations where overwriting drifted state is safe, declare the shorthand in your registration:
 
 ```php
-global $wpdb;
-$wpdb->insert(
-    $wpdb->prefix . 'abilityguard_log_meta',
-    array(
-        'log_id'     => $log_id,
-        'meta_key'   => 'skip_drift_check',
-        'meta_value' => '1',
-    ),
-    array( '%d', '%s', '%s' )
-);
+'safety' => array(
+    'destructive'      => true,
+    'skip_drift_check' => true,   // bypass the drift check on every invocation of this ability
+    'snapshot'         => array( /* ... */ ),
+),
 ```
 
-**Note:** The `RollbackService` docblock mentions `safety.skip_drift_check = true` as a per-registration shorthand, but that wiring is not implemented in v0.3. The `log_meta` approach above is the only working path. A `safety.skip_drift_check` shorthand is planned for v0.4.
+AbilityGuard writes a `log_meta` row keyed to the invocation; `RollbackService` reads it back when you trigger a rollback. You don't need to write the meta yourself.
+
+For per-invocation overrides (e.g. an emergency one-off), write the row directly:
+
+```php
+\AbilityGuard\Audit\LogMeta::set( $log_id, 'skip_drift_check', '1' );
+```
 
 When the drift check is skipped, the `abilityguard_rollback_drift` action still fires for observability if drift is present.
 
