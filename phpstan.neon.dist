@@ -1,0 +1,21 @@
+includes:
+    - vendor/szepeviktor/phpstan-wordpress/extension.neon
+
+parameters:
+    level: 6
+    paths:
+        - src
+        - abilityguard.php
+    bootstrapFiles:
+        - stubs/abilities-api.php
+        - stubs/wp-cli-utils.php
+    scanDirectories:
+        - vendor/php-stubs/wordpress-stubs
+    excludePaths:
+        - vendor/*
+        - lab/*
+        - tests/*
+    treatPhpDocTypesAsCertain: false
+    ignoreErrors:
+        - '#Constant ABILITYGUARD_URL not found#'
+        - '#Constant ABILITYGUARD_DIR not found#'

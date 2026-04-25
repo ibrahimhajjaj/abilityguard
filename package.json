@@ -1,0 +1,15 @@
+{
+  "name": "abilityguard-build",
+  "private": true,
+  "description": "Build pipeline for AbilityGuard's admin React app.",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:watch": "node scripts/build.mjs --watch"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

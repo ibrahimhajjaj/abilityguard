@@ -1,0 +1,66 @@
+{
+    "name": "ibrahimhajjaj/abilityguard",
+    "description": "Snapshot, audit, and rollback middleware for the WordPress Abilities API.",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "keywords": ["wordpress", "abilities-api", "mcp", "safety", "audit", "rollback"],
+    "require": {
+        "php": "^8.1",
+        "composer/installers": "^2.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.6",
+        "yoast/phpunit-polyfills": "^2.0",
+        "brain/monkey": "^2.6",
+        "mockery/mockery": "^1.6",
+        "wp-coding-standards/wpcs": "^3.0",
+        "phpcompatibility/phpcompatibility-wp": "^2.1",
+        "dealerdirect/phpcodesniffer-composer-installer": "^1.0",
+        "phpstan/phpstan": "^1.11",
+        "szepeviktor/phpstan-wordpress": "^1.3",
+        "php-stubs/wordpress-stubs": "^6.9",
+        "wp-phpunit/wp-phpunit": "^6.9"
+    },
+    "autoload": {
+        "psr-4": {
+            "AbilityGuard\\": "src/"
+        },
+        "files": [
+            "src/PublicApi.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "AbilityGuard\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "composer/installers": true,
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    },
+    "scripts": {
+        "test": "phpunit -c phpunit.xml.dist",
+        "test:integration": "wp-env run tests-cli --env-cwd=wp-content/plugins/abilityguard vendor/bin/phpunit -c phpunit-integration.xml.dist",
+        "lint": "phpcs --standard=phpcs.xml.dist",
+        "lint:fix": "phpcbf --standard=phpcs.xml.dist",
+        "stan": "phpstan analyse --memory-limit=512M",
+        "check": [
+            "@lint",
+            "@stan",
+            "@test"
+        ],
+        "env:start": "wp-env start",
+        "env:stop": "wp-env stop",
+        "env:destroy": "wp-env destroy"
+    },
+    "scripts-descriptions": {
+        "test": "Run unit test suite (Brain Monkey, no DB).",
+        "test:integration": "Run integration suite inside wp-env.",
+        "lint": "Run PHPCS against WordPress-Extra + WordPress-Docs rulesets.",
+        "stan": "Run PHPStan at level 6.",
+        "check": "Run lint + stan + unit (integration is CI-only by default)."
+    }
+}
