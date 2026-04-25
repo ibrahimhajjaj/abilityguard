@@ -15,6 +15,7 @@ use AbilityGuard\Contracts\AuditLoggerInterface;
 use AbilityGuard\Contracts\SnapshotServiceInterface;
 use AbilityGuard\Support\Hash;
 use AbilityGuard\Support\Json;
+use AbilityGuard\Support\PayloadCap;
 use Throwable;
 use WP_Error;
 
@@ -121,6 +122,19 @@ final class AbilityWrapper {
 			$mcp_id      = McpContext::current();
 			$caller_type = null !== $mcp_id ? 'mcp' : self::detect_caller_type();
 
+			$args_json   = self::encode_or_null( $input );
+			$result_json = $thrown ? null : self::encode_or_null( $result );
+
+			$args_limit   = self::resolve_payload_limit( $this->safety, 'abilityguard_max_args_bytes', 65536 );
+			$result_limit = self::resolve_payload_limit( $this->safety, 'abilityguard_max_result_bytes', 131072 );
+
+			$capped_args   = PayloadCap::cap_json( 'args', $args_json, $args_limit );
+			$capped_result = PayloadCap::cap_json( 'result', $result_json, $result_limit );
+
+			if ( $capped_args['truncated'] || $capped_result['truncated'] ) {
+				self::maybe_doing_it_wrong( $this->ability_name );
+			}
+
 			$this->audit->log(
 				array(
 					'invocation_id' => $invocation_id,
@@ -128,8 +142,8 @@ final class AbilityWrapper {
 					'caller_type'   => $caller_type,
 					'caller_id'     => $mcp_id,
 					'user_id'       => self::current_user_id(),
-					'args_json'     => self::encode_or_null( $input ),
-					'result_json'   => $thrown ? null : self::encode_or_null( $result ),
+					'args_json'     => $capped_args['json'],
+					'result_json'   => $capped_result['json'],
 					'status'        => $status,
 					'destructive'   => $destructive,
 					'duration_ms'   => $duration_ms,
@@ -188,6 +202,46 @@ final class AbilityWrapper {
 			return null;
 		}
 		return Hash::stable( $value );
+	}
+
+	/**
+	 * Resolve the effective payload byte limit for a given filter.
+	 *
+	 * Resolution order:
+	 *  1. `safety.max_payload_bytes` (per-ability override) - 0 means unlimited.
+	 *  2. `apply_filters( $filter_name, $cap_default )`.
+	 *
+	 * @param array<string, mixed> $safety      Safety config.
+	 * @param string               $filter_name WordPress filter name.
+	 * @param int                  $cap_default Default cap in bytes.
+	 *
+	 * @return int Effective limit; 0 = unlimited.
+	 */
+	private static function resolve_payload_limit( array $safety, string $filter_name, int $cap_default ): int {
+		if ( array_key_exists( 'max_payload_bytes', $safety ) ) {
+			return (int) $safety['max_payload_bytes'];
+		}
+		return (int) apply_filters( $filter_name, $cap_default );
+	}
+
+	/**
+	 * Fire a `_doing_it_wrong` notice once per request when truncation occurs.
+	 *
+	 * Only fires on non-production sites (WP_DEBUG must be true).
+	 *
+	 * @param string $ability_name Ability that triggered truncation.
+	 */
+	private static function maybe_doing_it_wrong( string $ability_name ): void {
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			_doing_it_wrong(
+				'AbilityGuard',
+				sprintf(
+					'Payload truncated for ability "%s". Increase the cap via abilityguard_max_args_bytes / abilityguard_max_result_bytes filters or set safety.max_payload_bytes => 0 to disable.',
+					esc_html( $ability_name )
+				),
+				'0.3.0'
+			);
+		}
 	}
 
 	/**

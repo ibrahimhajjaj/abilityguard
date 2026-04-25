@@ -17,6 +17,7 @@ use AbilityGuard\Snapshot\Collector\PostMetaCollector;
 use AbilityGuard\Snapshot\Collector\TaxonomyCollector;
 use AbilityGuard\Snapshot\Collector\UserRoleCollector;
 use AbilityGuard\Support\Hash;
+use AbilityGuard\Support\PayloadCap;
 
 /**
  * Resolves a per-invocation snapshot spec, runs each collector, persists
@@ -80,13 +81,22 @@ final class SnapshotService implements SnapshotServiceInterface {
 			$surfaces[ $surface ] = $this->collectors[ $surface ]->collect( $surface_spec );
 		}
 
-		$pre_hash    = Hash::stable( $surfaces );
-		$snapshot_id = $this->store->insert( $invocation_id, $surfaces, $pre_hash );
+		// Hash BEFORE truncation so integrity is preserved.
+		$pre_hash = Hash::stable( $surfaces );
+
+		$cap_limit = $this->resolve_snapshot_limit( $safety );
+		$capped    = PayloadCap::cap_surfaces( $surfaces, $cap_limit );
+
+		if ( array() !== $capped['truncated'] ) {
+			$this->maybe_doing_it_wrong_snapshot( $safety );
+		}
+
+		$snapshot_id = $this->store->insert( $invocation_id, $capped['surfaces'], $pre_hash );
 
 		return array(
 			'pre_hash'    => $pre_hash,
 			'snapshot_id' => $snapshot_id,
-			'surfaces'    => $surfaces,
+			'surfaces'    => $capped['surfaces'],
 		);
 	}
 
@@ -118,7 +128,49 @@ final class SnapshotService implements SnapshotServiceInterface {
 			$surfaces[ $surface ] = $this->collectors[ $surface ]->collect( $surface_spec );
 		}
 
-		$this->store->update_post_state( $snapshot_id, $surfaces );
+		$cap_limit = $this->resolve_snapshot_limit( $safety );
+		$capped    = PayloadCap::cap_surfaces( $surfaces, $cap_limit );
+
+		if ( array() !== $capped['truncated'] ) {
+			$this->maybe_doing_it_wrong_snapshot( $safety );
+		}
+
+		$this->store->update_post_state( $snapshot_id, $capped['surfaces'] );
+	}
+
+	/**
+	 * Resolve the effective per-surface snapshot byte limit.
+	 *
+	 * Resolution order:
+	 *  1. `safety.max_payload_bytes` (per-ability override) - 0 means unlimited.
+	 *  2. `apply_filters( 'abilityguard_max_snapshot_bytes', 1048576 )`.
+	 *
+	 * @param array<string, mixed> $safety Safety config.
+	 *
+	 * @return int Effective limit; 0 = unlimited.
+	 */
+	private function resolve_snapshot_limit( array $safety ): int {
+		if ( array_key_exists( 'max_payload_bytes', $safety ) ) {
+			return (int) $safety['max_payload_bytes'];
+		}
+		return (int) apply_filters( 'abilityguard_max_snapshot_bytes', 1048576 );
+	}
+
+	/**
+	 * Fire a `_doing_it_wrong` notice once when snapshot truncation occurs.
+	 *
+	 * Silenced on production sites (WP_DEBUG must be true).
+	 *
+	 * @param array<string, mixed> $safety Safety config (unused; kept for future context).
+	 */
+	private function maybe_doing_it_wrong_snapshot( array $safety ): void {
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			_doing_it_wrong(
+				'AbilityGuard',
+				'Snapshot surface truncated. Increase abilityguard_max_snapshot_bytes or set safety.max_payload_bytes => 0.',
+				'0.3.0'
+			);
+		}
 	}
 
 	/**
