@@ -53,6 +53,13 @@
             "@stan",
             "@test"
         ],
+        "check:full": [
+            "@lint",
+            "@stan",
+            "@test",
+            "@test:integration",
+            "@test:multisite"
+        ],
         "env:start": "wp-env start",
         "env:stop": "wp-env stop",
         "env:destroy": "wp-env destroy"

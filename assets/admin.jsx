@@ -1559,7 +1559,7 @@ function WalkedView({ val, depth }) {
 
 /* ---- Real-data hooks + helpers ---- */
 function useDetail(id) {
-  const initial = { loading: true, error: null, log: null, snapshot: null, parent: null, children: [], meta: {} };
+  const initial = { loading: true, error: null, log: null, snapshot: null, parent: null, children: [], meta: {}, approval: null, stages: [] };
   const [state, setState] = React.useState(initial);
   React.useEffect(() => {
     if (!id) return;
@@ -1578,6 +1578,8 @@ function useDetail(id) {
           parent: body.parent || null,
           children: Array.isArray(body.children) ? body.children : [],
           meta: body.meta && typeof body.meta === "object" ? body.meta : {},
+          approval: body.approval || null,
+          stages: Array.isArray(body.stages) ? body.stages : [],
         });
       })
       .catch((e) => { if (!cancelled) setState({ ...initial, loading: false, error: String(e) }); });
@@ -1868,6 +1870,8 @@ function DetailScreen({ store }) {
   const filesChanged = Array.isArray(meta.files_changed_on_rollback) ? meta.files_changed_on_rollback : [];
   const filesDeleted = Array.isArray(meta.files_deleted_on_rollback) ? meta.files_deleted_on_rollback : [];
   const skipDrift    = !!meta.skip_drift_check;
+  const approval     = detail.approval || null;
+  const stages       = detail.stages || [];
   const preHash  = log.pre_hash || row.pre_hash || "";
   const postHash = log.post_hash || row.post_hash || "";
   const callerLabel = row.caller_id ? `${row.caller} · ${row.caller_id}` : row.caller;
@@ -1947,6 +1951,42 @@ function DetailScreen({ store }) {
               </ul>
             )}
           </section>
+
+          {approval && stages.length > 0 && (
+            <section className="hy-card">
+              <header className="hy-card-head">
+                <h3>Approval chain</h3>
+                <span className="dim" style={{ fontSize: 11 }}>
+                  {(() => {
+                    const active = stages.find((s) => s.status === "waiting");
+                    const idx = active ? Number(active.stage_index) + 1 : stages.length;
+                    return `stage ${idx} of ${stages.length} · ${approval.status}`;
+                  })()}
+                </span>
+              </header>
+              <ul className="hy-timeline">
+                {stages.map((s) => {
+                  const dot = s.status === "approved" ? "var(--ok-fg)"
+                    : s.status === "rejected" || s.status === "cancelled" ? "var(--err-fg)"
+                    : s.status === "waiting" ? "var(--accent)"
+                    : "var(--ink-3)";
+                  return (
+                    <li key={s.id}>
+                      <span className="hy-tl-dot" style={{ background: dot, opacity: s.status === "pending" ? 0.4 : 1 }} />
+                      <div>
+                        <strong>Stage {Number(s.stage_index) + 1}</strong>
+                        <span className="dim" style={{ marginLeft: 8, fontSize: 11.5 }}>
+                          cap <code>{s.required_cap}</code> · {s.status}
+                          {s.decided_by ? <> · by user #{s.decided_by}</> : ""}
+                        </span>
+                      </div>
+                      {s.decided_at && <span className="dim mono hy-tl-when">{s.decided_at}</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
 
           {(parent || children.length > 0) && (
             <section className="hy-card">

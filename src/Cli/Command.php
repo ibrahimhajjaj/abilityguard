@@ -348,6 +348,12 @@ final class Command {
 			case 'list':
 				$this->approval_list( $assoc_args );
 				return;
+			case 'show':
+				if ( empty( $args[1] ) ) {
+					WP_CLI::error( 'Pass an approval id: wp abilityguard approval show <id>' );
+				}
+				$this->approval_show( (int) $args[1] );
+				return;
 			case 'approve':
 				if ( empty( $args[1] ) ) {
 					WP_CLI::error( 'Pass an approval id: wp abilityguard approval approve <id>' );
@@ -386,12 +392,70 @@ final class Command {
 			$filters['status'] = (string) $assoc_args['status'];
 		}
 
-		$repo   = new \AbilityGuard\Approval\ApprovalRepository();
-		$rows   = $repo->list( $filters );
+		$repo = new \AbilityGuard\Approval\ApprovalRepository();
+		$rows = $repo->list( $filters );
+
+		// Annotate each row with a stage progress string so the operator
+		// sees "stage 2 of 3" inline without a separate `approval show`.
+		foreach ( $rows as &$row ) {
+			$stages = $repo->find_stages( (int) $row['id'] );
+			if ( count( $stages ) > 1 ) {
+				$active     = null;
+				foreach ( $stages as $s ) {
+					if ( 'waiting' === $s['status'] ) {
+						$active = $s;
+						break;
+					}
+				}
+				$idx          = null !== $active ? ( (int) $active['stage_index'] ) + 1 : count( $stages );
+				$row['stage'] = sprintf( '%d / %d', $idx, count( $stages ) );
+			} else {
+				$row['stage'] = '-';
+			}
+		}
+		unset( $row );
+
 		$format = (string) ( $assoc_args['format'] ?? 'table' );
-		$fields = array( 'id', 'log_id', 'ability_name', 'status', 'requested_by', 'decided_by', 'decided_at', 'created_at' );
+		$fields = array( 'id', 'log_id', 'ability_name', 'status', 'stage', 'requested_by', 'decided_by', 'decided_at', 'created_at' );
 
 		Utils\format_items( $format, $rows, $fields );
+	}
+
+	/**
+	 * Render `approval show <id>` - full row plus stage chain.
+	 *
+	 * @param int $approval_id Approval row id.
+	 */
+	private function approval_show( int $approval_id ): void {
+		$repo = new \AbilityGuard\Approval\ApprovalRepository();
+		$row  = $repo->find( $approval_id );
+		if ( null === $row ) {
+			WP_CLI::error( "No approval with id {$approval_id}." );
+		}
+
+		WP_CLI::line( '' );
+		WP_CLI::line( sprintf( 'Approval #%d · %s · status: %s', $row['id'], $row['ability_name'], $row['status'] ) );
+		WP_CLI::line( sprintf( 'Log #%d · requested_by user #%d · created %s', $row['log_id'], $row['requested_by'], $row['created_at'] ) );
+		if ( ! empty( $row['decided_at'] ) ) {
+			WP_CLI::line( sprintf( 'Decided by user #%d at %s', $row['decided_by'], $row['decided_at'] ) );
+		}
+
+		$stages = $repo->find_stages( $approval_id );
+		if ( array() === $stages ) {
+			WP_CLI::line( '' );
+			WP_CLI::line( '(no stage rows - should not happen for v1.1+ approvals)' );
+			return;
+		}
+
+		WP_CLI::line( '' );
+		WP_CLI::line( 'Stage chain:' );
+		foreach ( $stages as $s ) {
+			$marker = 'waiting' === $s['status'] ? '→' : '  ';
+			$decided = ! empty( $s['decided_at'] )
+				? sprintf( ' (by user #%d at %s)', $s['decided_by'], $s['decided_at'] )
+				: '';
+			WP_CLI::line( sprintf( '  %s stage %d · %-9s · cap %s%s', $marker, (int) $s['stage_index'] + 1, $s['status'], $s['required_cap'], $decided ) );
+		}
 	}
 
 	/**
