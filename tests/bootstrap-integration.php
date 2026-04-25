@@ -31,6 +31,8 @@ tests_add_filter(
 			require_once $abilities_api;
 		}
 		require dirname( __DIR__ ) . '/abilityguard.php';
+		require dirname( __DIR__ ) . '/examples/abilityguard-woocommerce-pack/abilityguard-woocommerce-pack.php';
+		require dirname( __DIR__ ) . '/examples/abilityguard-fluent-forms-pack/abilityguard-fluent-forms-pack.php';
 	}
 );
 

@@ -6,6 +6,7 @@ parameters:
     paths:
         - src
         - abilityguard.php
+        - examples
     bootstrapFiles:
         - stubs/abilities-api.php
         - stubs/wp-cli-utils.php

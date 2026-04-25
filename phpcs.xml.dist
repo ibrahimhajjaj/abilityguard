@@ -5,6 +5,7 @@
 	<file>abilityguard.php</file>
 	<file>src</file>
 	<file>tests</file>
+	<file>examples</file>
 
 	<exclude-pattern>*/vendor/*</exclude-pattern>
 	<exclude-pattern>*/node_modules/*</exclude-pattern>
@@ -27,13 +28,13 @@
 
 	<rule ref="WordPress.WP.I18n">
 		<properties>
-			<property name="text_domain" type="array" value="abilityguard"/>
+			<property name="text_domain" type="array" value="abilityguard,ag-woo-pack,ag-ff-pack"/>
 		</properties>
 	</rule>
 
 	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
 		<properties>
-			<property name="prefixes" type="array" value="abilityguard,ABILITYGUARD,AbilityGuard"/>
+			<property name="prefixes" type="array" value="abilityguard,ABILITYGUARD,AbilityGuard,ag_woo_pack,AG_WOO_PACK,ag_ff_pack,AG_FF_PACK,acme"/>
 		</properties>
 		<exclude-pattern>*/tests/*</exclude-pattern>
 	</rule>
