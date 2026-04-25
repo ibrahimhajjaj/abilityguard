@@ -143,6 +143,35 @@ final class AbilityWrapper {
 			try {
 				$snapshot = $this->snapshots->capture( $invocation_id, $this->safety, $input );
 
+				/**
+				 * Fires immediately before the wrapped callback runs.
+				 *
+				 * Hook this to start a Sentry/Datadog span, increment a counter,
+				 * or write a structured-log line for observability.
+				 *
+				 * @since 0.5.0
+				 *
+				 * @param string $invocation_id UUID for this invocation.
+				 * @param string $ability_name  Registered ability name.
+				 * @param mixed  $input         Ability input (un-redacted).
+				 * @param array<string, mixed> $context {
+				 *   @type bool   $destructive Whether the ability is destructive.
+				 *   @type int    $snapshot_id Snapshot row id (0 if none).
+				 *   @type string $caller_type 'rest', 'mcp', 'cli', or 'internal'.
+				 * }
+				 */
+				do_action(
+					'abilityguard_invocation_started',
+					$invocation_id,
+					$this->ability_name,
+					$input,
+					array(
+						'destructive' => $destructive,
+						'snapshot_id' => (int) ( $snapshot['snapshot_id'] ?? 0 ),
+						'caller_type' => self::detect_caller_type(),
+					)
+				);
+
 				$start  = hrtime( true );
 				$result = null;
 				$status = 'ok';
@@ -157,6 +186,21 @@ final class AbilityWrapper {
 					$thrown = $e;
 				}
 				$duration_ms = (int) ( ( hrtime( true ) - $start ) / 1_000_000 );
+
+				if ( 'error' === $status ) {
+					/**
+					 * Fires when the wrapped callback throws or returns WP_Error.
+					 *
+					 * @since 0.5.0
+					 *
+					 * @param string          $invocation_id UUID.
+					 * @param string          $ability_name  Ability name.
+					 * @param Throwable|null  $thrown        Exception instance (null if WP_Error).
+					 * @param mixed           $result        WP_Error returned (null if exception).
+					 * @param int             $duration_ms   Time spent in the callback.
+					 */
+					do_action( 'abilityguard_invocation_error', $invocation_id, $this->ability_name, $thrown, $result, $duration_ms );
+				}
 
 				if ( 'ok' === $status && null !== $snapshot['snapshot_id'] ) {
 					$this->snapshots->capture_post( $snapshot['snapshot_id'], $this->safety, $input );
@@ -200,6 +244,43 @@ final class AbilityWrapper {
 						'pre_hash'      => $snapshot['pre_hash'],
 						'post_hash'     => $post_hash,
 						'snapshot_id'   => $snapshot['snapshot_id'],
+					)
+				);
+
+				/**
+				 * Fires after every invocation, success or error, after the audit row is written.
+				 *
+				 * Hook this to close a Sentry/Datadog span, record duration histograms,
+				 * or emit a structured-log line.
+				 *
+				 * @since 0.5.0
+				 *
+				 * @param string $invocation_id UUID.
+				 * @param string $ability_name  Ability name.
+				 * @param string $status        'ok' or 'error'.
+				 * @param int    $duration_ms   Time spent in the original callback.
+				 * @param array<string, mixed> $context {
+				 *   @type bool   $destructive
+				 *   @type string $caller_type
+				 *   @type string|null $caller_id
+				 *   @type int    $snapshot_id
+				 *   @type bool   $args_truncated
+				 *   @type bool   $result_truncated
+				 * }
+				 */
+				do_action(
+					'abilityguard_invocation_completed',
+					$invocation_id,
+					$this->ability_name,
+					$status,
+					$duration_ms,
+					array(
+						'destructive'      => $destructive,
+						'caller_type'      => $caller_type,
+						'caller_id'        => $mcp_id,
+						'snapshot_id'      => (int) ( $snapshot['snapshot_id'] ?? 0 ),
+						'args_truncated'   => (bool) $capped_args['truncated'],
+						'result_truncated' => (bool) $capped_result['truncated'],
 					)
 				);
 
