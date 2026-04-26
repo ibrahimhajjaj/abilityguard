@@ -2,7 +2,7 @@
 #
 # Build the AbilityGuard release zip into ./dist/.
 #
-# Strips dev artifacts (tests/, lab/, examples/, stubs/, phpunit*, phpcs*,
+# Strips dev artifacts (tests/, examples/, stubs/, phpunit*, phpcs*,
 # phpstan*, composer*, package*, .github/, .wp-env.json, docs/, README.md,
 # .git/, vendor/, node_modules/) and ships only the runtime tree.
 #
@@ -42,7 +42,6 @@ rsync -a \
     --exclude='node_modules' \
     --exclude='vendor' \
     --exclude='tests' \
-    --exclude='lab' \
     --exclude='examples' \
     --exclude='stubs' \
     --exclude='scripts' \

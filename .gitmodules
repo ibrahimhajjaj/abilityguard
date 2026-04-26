@@ -1,0 +1,4 @@
+[submodule "tests/fixtures/mcp-adapter"]
+	path = tests/fixtures/mcp-adapter
+	url = https://github.com/WordPress/mcp-adapter
+	branch = trunk

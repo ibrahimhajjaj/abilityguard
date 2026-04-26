@@ -58,9 +58,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        wp: ["latest", "trunk"]
+        wp: ["latest", "master"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
