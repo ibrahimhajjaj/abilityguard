@@ -76,7 +76,7 @@ class SnapshotStore {
 	public function find_by_invocation_id( string $invocation_id ): ?array {
 		global $wpdb;
 		$table = Installer::table( 'snapshots' );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$row = $wpdb->get_row( $wpdb->prepare( "SELECT id, invocation_id, surfaces_json, pre_hash, post_state_json FROM {$table} WHERE invocation_id = %s", $invocation_id ), ARRAY_A );
 		if ( ! $row ) {
 			return null;

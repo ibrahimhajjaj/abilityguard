@@ -64,7 +64,7 @@ final class Lock {
 
 		$timeout = max( 0, $timeout_seconds );
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- key is sha1-derived, never user input.
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- advisory lock primitive, key is sha1-derived.
 		$result = $wpdb->get_var(
 			$wpdb->prepare(
 				'SELECT GET_LOCK(%s, %d)',
@@ -108,7 +108,7 @@ final class Lock {
 
 		global $wpdb;
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- key is sha1-derived, never user input.
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- advisory lock primitive, key is sha1-derived.
 		$result = $wpdb->get_var(
 			$wpdb->prepare(
 				'SELECT RELEASE_LOCK(%s)',

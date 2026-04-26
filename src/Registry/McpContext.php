@@ -12,6 +12,8 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Registry;
 
+defined( 'ABSPATH' ) || exit;
+
 /**
  * Thread-local (request-scoped) holder for the active MCP server id.
  *

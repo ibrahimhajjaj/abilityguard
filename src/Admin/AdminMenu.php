@@ -9,6 +9,8 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Admin;
 
+defined( 'ABSPATH' ) || exit;
+
 use AbilityGuard\Audit\LogRepository;
 
 /**

@@ -9,6 +9,8 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Registry;
 
+defined( 'ABSPATH' ) || exit;
+
 use AbilityGuard\Approval\ApprovalService;
 use AbilityGuard\Contracts\AuditLoggerInterface;
 use AbilityGuard\Contracts\SnapshotServiceInterface;

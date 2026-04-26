@@ -9,6 +9,8 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Rollback;
 
+defined( 'ABSPATH' ) || exit;
+
 use AbilityGuard\Audit\LogMeta;
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Installer;
@@ -342,7 +344,7 @@ final class RollbackService {
 			return false;
 		}
 		$table = Installer::table( 'log_meta' );
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$value = $wpdb->get_var(
 			$wpdb->prepare(
 				"SELECT meta_value FROM {$table} WHERE log_id = %d AND meta_key = %s LIMIT 1",
@@ -350,7 +352,7 @@ final class RollbackService {
 				'skip_drift_check'
 			)
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		return '1' === $value || 'true' === $value;
 	}
 }

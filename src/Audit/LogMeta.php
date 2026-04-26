@@ -35,7 +35,7 @@ final class LogMeta {
 		}
 		global $wpdb;
 		$table = Installer::table( 'log_meta' );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.SlowDBQuery.slow_db_query_meta_key, WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- custom abilityguard table, not WP postmeta.
 		$wpdb->insert(
 			$table,
 			array(
@@ -45,6 +45,7 @@ final class LogMeta {
 			),
 			array( '%d', '%s', '%s' )
 		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.SlowDBQuery.slow_db_query_meta_key, WordPress.DB.SlowDBQuery.slow_db_query_meta_value
 	}
 
 	/**
@@ -61,7 +62,7 @@ final class LogMeta {
 		}
 		global $wpdb;
 		$table = Installer::table( 'log_meta' );
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$rows = $wpdb->get_col(
 			$wpdb->prepare(
 				"SELECT meta_value FROM {$table} WHERE log_id = %d AND meta_key = %s ORDER BY id ASC",

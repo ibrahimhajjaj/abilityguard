@@ -28,7 +28,7 @@ class ApprovalRepository {
 	public function find( int $id ): ?array {
 		global $wpdb;
 		$table = Installer::table( 'approvals' );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE id = %d", $id ), ARRAY_A );
 		return is_array( $row ) ? $row : null;
 	}
@@ -43,7 +43,7 @@ class ApprovalRepository {
 	public function find_by_log_id( int $log_id ): ?array {
 		global $wpdb;
 		$table = Installer::table( 'approvals' );
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table} WHERE log_id = %d ORDER BY id DESC LIMIT 1", $log_id ), ARRAY_A );
 		return is_array( $row ) ? $row : null;
 	}
@@ -82,13 +82,13 @@ class ApprovalRepository {
 		$offset   = isset( $filters['offset'] ) ? max( 0, (int) $filters['offset'] ) : 0;
 
 		$where_sql = implode( ' AND ', $where );
-		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$sql = "SELECT * FROM {$table} WHERE {$where_sql} ORDER BY id DESC LIMIT %d OFFSET %d";
 
 		$params[] = $per_page;
 		$params[] = $offset;
 
-		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $params ), ARRAY_A );
 		return is_array( $rows ) ? $rows : array();
 	}
@@ -105,7 +105,7 @@ class ApprovalRepository {
 	public function find_stages( int $approval_id ): array {
 		global $wpdb;
 		$table = Installer::table( 'approval_stages' );
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name comes from Installer::table(), not user input.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- table name comes from Installer::table(), not user input.
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT * FROM {$table} WHERE approval_id = %d ORDER BY stage_index ASC",
@@ -113,7 +113,7 @@ class ApprovalRepository {
 			),
 			ARRAY_A
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		return is_array( $rows ) ? $rows : array();
 	}
 
@@ -128,7 +128,7 @@ class ApprovalRepository {
 	public function find_active_stage( int $approval_id ): ?array {
 		global $wpdb;
 		$table = Installer::table( 'approval_stages' );
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name comes from Installer::table(), not user input.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- table name comes from Installer::table(), not user input.
 		$row = $wpdb->get_row(
 			$wpdb->prepare(
 				"SELECT * FROM {$table} WHERE approval_id = %d AND status = %s ORDER BY stage_index ASC LIMIT 1",
@@ -137,7 +137,7 @@ class ApprovalRepository {
 			),
 			ARRAY_A
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		return is_array( $row ) ? $row : null;
 	}
 }

@@ -70,7 +70,7 @@ function abilityguard_uninstall_purge_staging(): void {
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink, WordPress.PHP.NoSilencedErrors.Discouraged
 		@unlink( trailingslashit( $dir ) . $entry );
 	}
-	// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+	// phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- best-effort uninstall, WP_Filesystem unavailable post-deactivation.
 	@rmdir( $dir );
 }
 
@@ -78,15 +78,15 @@ if ( is_multisite() && function_exists( 'get_sites' ) ) {
 	// Walk every subsite in every network. Plugin deletion means uninstall;
 	// orphan tables on subsites the operator may not even remember about
 	// would just rot in the database.
-	$site_ids = get_sites(
+	$abilityguard_site_ids = get_sites(
 		array(
 			'fields' => 'ids',
 			'number' => 0,
 		)
 	);
-	if ( is_array( $site_ids ) ) {
-		foreach ( $site_ids as $site_id ) {
-			switch_to_blog( (int) $site_id );
+	if ( is_array( $abilityguard_site_ids ) ) {
+		foreach ( $abilityguard_site_ids as $abilityguard_site_id ) {
+			switch_to_blog( (int) $abilityguard_site_id );
 			abilityguard_uninstall_single_site();
 			restore_current_blog();
 		}

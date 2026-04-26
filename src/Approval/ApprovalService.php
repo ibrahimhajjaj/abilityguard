@@ -355,7 +355,7 @@ final class ApprovalService {
 	private function record_stage_approval( int $approval_id, int $stage_index, int $user_id, int $required_count ): ?bool {
 		global $wpdb;
 		$table = Installer::table( 'approval_stages' );
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name from Installer::table().
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- table name from Installer::table().
 		// MySQL evaluates SET clauses left-to-right and later expressions see
 		// already-updated columns. Run the CASE assignments BEFORE the
 		// increment so they evaluate against the pre-update decision_count.
@@ -380,14 +380,14 @@ final class ApprovalService {
 				'waiting'
 			)
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		if ( ! is_int( $rows ) || $rows < 1 ) {
 			return null;
 		}
 
 		// Re-read to check if we crossed the threshold this round.
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$status = $wpdb->get_var(
 			$wpdb->prepare(
 				"SELECT status FROM {$table} WHERE approval_id = %d AND stage_index = %d",
@@ -395,7 +395,7 @@ final class ApprovalService {
 				$stage_index
 			)
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		return 'approved' === (string) $status;
 	}
 
@@ -530,7 +530,7 @@ final class ApprovalService {
 		// resurrected by an old advance() call.
 		global $wpdb;
 		$stage_table = Installer::table( 'approval_stages' );
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name from Installer::table(), not user input.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- table name from Installer::table(), not user input.
 		$wpdb->query(
 			$wpdb->prepare(
 				"UPDATE {$stage_table} SET status = %s WHERE approval_id = %d AND status = %s",
@@ -539,7 +539,7 @@ final class ApprovalService {
 				'pending'
 			)
 		);
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		$now            = current_time( 'mysql', true );
 		$approval_table = Installer::table( 'approvals' );

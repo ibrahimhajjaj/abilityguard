@@ -107,6 +107,7 @@ final class FileBlobStore {
 		if ( false === $ok ) {
 			throw new RuntimeException( 'AbilityGuard\\Snapshot\\FileBlobStore: temp write failed.' );
 		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic rename for content-addressed staging.
 		if ( ! rename( $tmp, $path ) ) {
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
 			@unlink( $tmp );

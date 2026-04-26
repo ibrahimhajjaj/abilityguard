@@ -9,6 +9,8 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Admin;
 
+defined( 'ABSPATH' ) || exit;
+
 use AbilityGuard\Approval\ApprovalRepository;
 use AbilityGuard\Approval\ApprovalService;
 use AbilityGuard\Approval\CapabilityManager;
@@ -637,11 +639,11 @@ final class RestController {
 		global $wpdb;
 		$log_table       = \AbilityGuard\Installer::table( 'log' );
 		$approvals_table = \AbilityGuard\Installer::table( 'approvals' );
-		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		$pending_logs      = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$log_table} WHERE status = 'pending'" );
 		$pending_approvals = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$approvals_table} WHERE status = 'pending'" );
 		$total_logs        = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$log_table}" );
-		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return new WP_REST_Response(
 			array(

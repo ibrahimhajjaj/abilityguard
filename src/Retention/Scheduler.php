@@ -9,6 +9,8 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Retention;
 
+defined( 'ABSPATH' ) || exit;
+
 /**
  * Wires WP-Cron for the retention prune job.
  */

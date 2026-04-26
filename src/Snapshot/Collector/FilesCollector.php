@@ -313,6 +313,7 @@ final class FilesCollector implements CollectorInterface {
 		if ( false === file_put_contents( $tmp, $bytes ) ) {
 			return false;
 		}
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic rename for snapshot restore.
 		if ( ! rename( $tmp, $path ) ) {
 			// phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
 			@unlink( $tmp );

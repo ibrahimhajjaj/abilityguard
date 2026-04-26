@@ -9,6 +9,8 @@ declare( strict_types=1 );
 
 namespace AbilityGuard;
 
+defined( 'ABSPATH' ) || exit;
+
 /**
  * Creates and upgrades the AbilityGuard custom tables via dbDelta.
  *
