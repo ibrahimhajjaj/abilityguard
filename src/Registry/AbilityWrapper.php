@@ -236,9 +236,53 @@ final class AbilityWrapper {
 				return $result;
 			}
 
-			// Success: the wp_after_execute_ability listener finalizes the
-			// audit row and fires abilityguard_invocation_completed. Just
-			// return; the listener will run after core's output validation.
+			// Success path. The wp_after_execute_ability listener will
+			// normally finalize the audit row + capture post-snapshot. But
+			// dry-run (and other post-execute filters) need the post-snapshot
+			// available NOW so they can diff and roll back before output
+			// validation runs against a transformed envelope. Capture it here
+			// so the filter has something to compare against; the after-hook
+			// listener will harmlessly overwrite the same post_state_json if
+			// it still fires (DryRun marks ctx->completed to short it out).
+			if ( null !== ( $ctx->snapshot['snapshot_id'] ?? null ) ) {
+				$this->snapshots->capture_post( (int) $ctx->snapshot['snapshot_id'], $this->safety, $input );
+			}
+
+			/**
+			 * Filters the result returned from the wrapped execute_callback
+			 * after the post-snapshot has been captured. Returning a
+			 * transformed value lets follow-up plugins (DryRun) wrap the
+			 * result in an envelope and trigger side effects like
+			 * auto-rollback. Implementations that complete the audit row +
+			 * mark $ctx->completed prevent the after-hook listener from
+			 * double-writing.
+			 *
+			 * @since 1.3.0
+			 *
+			 * @param mixed                $result       The execute result.
+			 * @param string               $ability_name Ability name.
+			 * @param mixed                $input        Input passed to execute.
+			 * @param array<string, mixed> $context      invocation_id, log_id,
+			 *                                           snapshot_id, caller_type,
+			 *                                           caller_id, destructive,
+			 *                                           safety, duration_ms.
+			 */
+			$result = apply_filters(
+				'abilityguard_post_execute_result',
+				$result,
+				$this->ability_name,
+				$input,
+				array(
+					'invocation_id' => $ctx->invocation_id,
+					'log_id'        => $ctx->log_id,
+					'snapshot_id'   => (int) ( $ctx->snapshot['snapshot_id'] ?? 0 ),
+					'caller_type'   => $ctx->caller_type,
+					'caller_id'     => $ctx->caller_id,
+					'destructive'   => $destructive,
+					'safety'        => $this->safety,
+					'duration_ms'   => $duration_ms,
+				)
+			);
 			return $result;
 		} finally {
 			if ( null !== $lock_key && ! $lock_inherited ) {
@@ -477,10 +521,31 @@ final class AbilityWrapper {
 				$this->snapshots->capture_post( $snapshot['snapshot_id'], $this->safety, $input );
 			}
 
-			$this->write_legacy_audit_row( $invocation_id, $parent_invocation_id, $snapshot, $input, $thrown ? null : $result, $status, $duration_ms, $destructive );
+			$legacy_log_id = $this->write_legacy_audit_row( $invocation_id, $parent_invocation_id, $snapshot, $input, $thrown ? null : $result, $status, $duration_ms, $destructive );
 
 			if ( null !== $thrown ) {
 				throw $thrown;
+			}
+
+			// Post-execute extension seam (parity with run_with_context).
+			// See the docblock there for filter semantics.
+			if ( 'ok' === $status ) {
+				$result = apply_filters(
+					'abilityguard_post_execute_result',
+					$result,
+					$this->ability_name,
+					$input,
+					array(
+						'invocation_id' => $invocation_id,
+						'log_id'        => $legacy_log_id,
+						'snapshot_id'   => (int) ( $snapshot['snapshot_id'] ?? 0 ),
+						'caller_type'   => InvocationHelpers::detect_caller_type(),
+						'caller_id'     => McpContext::current(),
+						'destructive'   => $destructive,
+						'safety'        => $this->safety,
+						'duration_ms'   => $duration_ms,
+					)
+				);
 			}
 			return $result;
 		} finally {
@@ -511,7 +576,7 @@ final class AbilityWrapper {
 		string $status,
 		int $duration_ms,
 		bool $destructive
-	): void {
+	): int {
 		$mcp_id      = McpContext::current();
 		$caller_type = null !== $mcp_id ? 'mcp' : InvocationHelpers::detect_caller_type();
 
@@ -562,6 +627,8 @@ final class AbilityWrapper {
 				'result_truncated' => (bool) $result_shape['truncated'],
 			)
 		);
+
+		return $log_id;
 	}
 
 	/**

@@ -47,6 +47,8 @@ final class Plugin {
 
 		( new Registry\InvocationObserver( $snapshots, $audit ) )->register();
 
+		Safety\DryRun::register();
+
 		( new Retention\Scheduler() )->register();
 
 		Cli\Command::register();
