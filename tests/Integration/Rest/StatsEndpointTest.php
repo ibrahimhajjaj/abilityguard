@@ -58,12 +58,48 @@ final class StatsEndpointTest extends WP_UnitTestCase {
 
 	public function test_admin_aggregates_counts_and_timings(): void {
 		// 3 ok, 1 error, 1 rolled_back, 1 pending.
-		$this->seed_log_row( array( 'ability_name' => 'foo/a', 'status' => 'ok', 'duration_ms' => 10 ) );
-		$this->seed_log_row( array( 'ability_name' => 'foo/a', 'status' => 'ok', 'duration_ms' => 20 ) );
-		$this->seed_log_row( array( 'ability_name' => 'foo/a', 'status' => 'ok', 'duration_ms' => 30 ) );
-		$this->seed_log_row( array( 'ability_name' => 'foo/b', 'status' => 'error', 'duration_ms' => 100 ) );
-		$this->seed_log_row( array( 'ability_name' => 'foo/c', 'status' => 'rolled_back', 'duration_ms' => 5 ) );
-		$this->seed_log_row( array( 'ability_name' => 'foo/d', 'status' => 'pending', 'duration_ms' => 0 ) );
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'foo/a',
+				'status'       => 'ok',
+				'duration_ms'  => 10,
+			)
+		);
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'foo/a',
+				'status'       => 'ok',
+				'duration_ms'  => 20,
+			)
+		);
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'foo/a',
+				'status'       => 'ok',
+				'duration_ms'  => 30,
+			)
+		);
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'foo/b',
+				'status'       => 'error',
+				'duration_ms'  => 100,
+			)
+		);
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'foo/c',
+				'status'       => 'rolled_back',
+				'duration_ms'  => 5,
+			)
+		);
+		$this->seed_log_row(
+			array(
+				'ability_name' => 'foo/d',
+				'status'       => 'pending',
+				'duration_ms'  => 0,
+			)
+		);
 
 		// Seed an approved approval row to verify counts['approved'] sources from approvals table.
 		global $wpdb;

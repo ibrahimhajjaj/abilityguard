@@ -151,5 +151,4 @@ final class RegistrationFilterTest extends WP_UnitTestCase {
 		$ability = wp_get_ability( $ability_name );
 		$this->assertNotNull( $ability, 'core registry should accept args after safety is stripped' );
 	}
-
 }

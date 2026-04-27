@@ -10,6 +10,7 @@
 	<exclude-pattern>*/vendor/*</exclude-pattern>
 	<exclude-pattern>*/node_modules/*</exclude-pattern>
 	<exclude-pattern>*/lab/*</exclude-pattern>
+	<exclude-pattern>*/tests/fixtures/*</exclude-pattern>
 	<exclude-pattern>*/.phpunit.cache/*</exclude-pattern>
 
 	<arg name="extensions" value="php"/>

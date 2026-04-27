@@ -41,15 +41,19 @@ final class InvocationContext {
 	/**
 	 * Construct.
 	 *
-	 * @param string      $invocation_id        UUID v4.
-	 * @param string|null $parent_invocation_id Parent UUID or null.
-	 * @param string      $ability_name         Ability name.
-	 * @param string      $caller_type          'rest', 'mcp', 'cli', or 'internal'.
-	 * @param string|null $caller_id            MCP server id when caller_type is mcp.
-	 * @param int         $user_id              Current user id (0 if none).
-	 * @param int         $start_hr             hrtime(true) at observer entry.
-	 * @param array<string, mixed> $safety      Resolved safety array.
-	 * @param mixed       $input                Ability input as received by the before-hook.
+	 * @param string                    $invocation_id        UUID v4.
+	 * @param string|null               $parent_invocation_id Parent UUID or null.
+	 * @param string                    $ability_name         Ability name.
+	 * @param string                    $caller_type          'rest', 'mcp', 'cli', or 'internal'.
+	 * @param string|null               $caller_id            MCP server id when caller_type is mcp.
+	 * @param int                       $user_id              Current user id (0 if none).
+	 * @param int                       $start_hr             hrtime(true) at observer entry.
+	 * @param array<string, mixed>      $safety      Resolved safety array.
+	 * @param mixed                     $input                Ability input as received by the before-hook.
+	 * @param array<string, mixed>|null $snapshot Snapshot row from SnapshotStore once captured.
+	 * @param int                       $log_id   Audit log row id once written.
+	 * @param bool                      $approval_handled Whether the approval gate has run.
+	 * @param bool                      $completed Whether the after-hook has finalized this context.
 	 */
 	public function __construct(
 		public readonly string $invocation_id,

@@ -108,7 +108,7 @@ final class DryRun {
 
 		// Always tag the row, even if there's nothing to diff. Callers
 		// pulling /dry-run/{invocation_id} need to see "yes, you asked for
-		// a dry run" before they see "nothing was rolled back."
+		// a dry run" before they see "nothing was rolled back".
 		LogMeta::set( $log_id, 'dry_run', '1' );
 		self::emit_dry_run_headers( $invocation_id );
 
@@ -207,7 +207,7 @@ final class DryRun {
 		if ( null === $row ) {
 			return new WP_Error( 'abilityguard_dry_run_not_found', 'No invocation found for that id.', array( 'status' => 404 ) );
 		}
-		$log_id = (int) ( $row['id'] ?? 0 );
+		$log_id       = (int) ( $row['id'] ?? 0 );
 		$dry_run_flag = LogMeta::get_all( $log_id, 'dry_run' );
 		if ( array() === $dry_run_flag || '1' !== (string) $dry_run_flag[0] ) {
 			return new WP_Error( 'abilityguard_dry_run_not_a_dry_run', 'Invocation was not a dry run.', array( 'status' => 409 ) );

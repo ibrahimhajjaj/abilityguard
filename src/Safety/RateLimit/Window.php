@@ -28,6 +28,9 @@ final class Window {
 
 	/**
 	 * Bucket index for `now` in a window of `W` seconds.
+	 *
+	 * @param int $now    Current unix timestamp.
+	 * @param int $window Window length in seconds.
 	 */
 	public static function bucket_index( int $now, int $window ): int {
 		return intdiv( $now, $window );
@@ -35,6 +38,9 @@ final class Window {
 
 	/**
 	 * Seconds elapsed inside the current bucket.
+	 *
+	 * @param int $now    Current unix timestamp.
+	 * @param int $window Window length in seconds.
 	 */
 	public static function elapsed_in_bucket( int $now, int $window ): int {
 		return $now % $window;
@@ -47,6 +53,9 @@ final class Window {
 	 * Pure function of (now, W). No storage round-trip, the previous
 	 * implementation read `_transient_timeout_<key>` which leaked transient
 	 * internals and broke under external object caches.
+	 *
+	 * @param int $now    Current unix timestamp.
+	 * @param int $window Window length in seconds.
 	 */
 	public static function seconds_until_reset( int $now, int $window ): int {
 		$t = $window - ( $now % $window );

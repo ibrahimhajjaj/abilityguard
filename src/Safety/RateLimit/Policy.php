@@ -19,6 +19,13 @@ defined( 'ABSPATH' ) || exit;
  */
 final class Policy {
 
+	/**
+	 * Construct an immutable policy.
+	 *
+	 * @param string $id     Wire identifier (sf-string-safe token).
+	 * @param int    $limit  Max calls allowed inside the window.
+	 * @param int    $window Window length in seconds.
+	 */
 	public function __construct(
 		public readonly string $id,
 		public readonly int $limit,

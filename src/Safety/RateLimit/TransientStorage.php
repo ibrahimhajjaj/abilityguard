@@ -21,6 +21,14 @@ defined( 'ABSPATH' ) || exit;
  */
 final class TransientStorage implements Storage {
 
+	/**
+	 * Read-modify-write increment via transients. NOT atomic.
+	 *
+	 * @param string $key Bucket key.
+	 * @param int    $ttl Bucket TTL in seconds.
+	 *
+	 * @return int Counter value after increment.
+	 */
 	public function increment( string $key, int $ttl ): int {
 		$current = (int) \get_transient( $key );
 		$next    = $current + 1;
@@ -28,15 +36,28 @@ final class TransientStorage implements Storage {
 		return $next;
 	}
 
+	/**
+	 * Read the current counter value, 0 when missing.
+	 *
+	 * @param string $key Bucket key.
+	 */
 	public function get( string $key ): int {
 		$v = \get_transient( $key );
 		return false === $v ? 0 : (int) $v;
 	}
 
+	/**
+	 * Delete a counter (used by tests and admin reset paths).
+	 *
+	 * @param string $key Bucket key.
+	 */
 	public function delete( string $key ): void {
 		\delete_transient( $key );
 	}
 
+	/**
+	 * Whether `increment` is atomic across concurrent requests.
+	 */
 	public function is_atomic(): bool {
 		return false;
 	}

@@ -48,7 +48,7 @@ trait AbilityRegistrationTrait {
 	 * Register an ability through the real registry so the registration filter
 	 * wraps execute_callback and the observer wires up.
 	 *
-	 * @param string                                                      $name  Ability name.
+	 * @param string                                                                  $name  Ability name.
 	 * @param callable(WP_Abilities_Registry):array<string,mixed>|array<string,mixed> $build Args or builder.
 	 */
 	protected function register_via_init( string $name, callable|array $build ): WP_Ability {
@@ -69,7 +69,8 @@ trait AbilityRegistrationTrait {
 	 * @param string               $name     Unique ability name.
 	 * @param array<string, mixed> $safety   Safety config.
 	 * @param callable             $callback execute_callback.
-	 * @param mixed                $input    Input passed to execute().
+	 * @param mixed                $input        Input passed to execute().
+	 * @param array<string, mixed> $input_schema Optional input schema override.
 	 *
 	 * @return array<string, mixed>
 	 */

@@ -98,5 +98,4 @@ final class RegistrationFilter {
 
 		return $args;
 	}
-
 }

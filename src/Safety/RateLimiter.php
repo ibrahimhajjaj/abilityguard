@@ -76,11 +76,15 @@ final class RateLimiter {
 
 	/**
 	 * Boot guard.
+	 *
+	 * @var bool
 	 */
 	private static bool $registered = false;
 
 	/**
 	 * Selected storage backend. Lazily resolved on first use.
+	 *
+	 * @var ?Storage
 	 */
 	private static ?Storage $storage = null;
 
@@ -170,8 +174,8 @@ final class RateLimiter {
 		$ability_hash = substr( md5( $ability_name ), 0, 16 );
 		$now          = self::now();
 
-		$state      = array();
-		$exhausted  = array();
+		$state       = array();
+		$exhausted   = array();
 		$retry_after = 0;
 
 		foreach ( $policies as $policy ) {
@@ -188,9 +192,9 @@ final class RateLimiter {
 			$reset    = Window::seconds_until_reset( $now, $policy->window );
 
 			if ( $estimate >= $policy->limit ) {
-				$exhausted[]  = $policy;
-				$retry_after  = max( $retry_after, $reset );
-				$state[]      = array(
+				$exhausted[] = $policy;
+				$retry_after = max( $retry_after, $reset );
+				$state[]     = array(
 					'policy'    => $policy,
 					'remaining' => 0,
 					'reset'     => $reset,
@@ -201,9 +205,9 @@ final class RateLimiter {
 
 			// Admitted by this policy: record the increment.
 			try {
-				$ttl     = $policy->window * 2;
-				$key     = self::bucket_key( $policy, $principal, $ability_hash, Window::bucket_index( $now, $policy->window ) );
-				$new_curr = self::storage()->increment( $key, $ttl );
+				$ttl            = $policy->window * 2;
+				$key            = self::bucket_key( $policy, $principal, $ability_hash, Window::bucket_index( $now, $policy->window ) );
+				$new_curr       = self::storage()->increment( $key, $ttl );
 				$counts['curr'] = $new_curr;
 			} catch ( Throwable $e ) {
 				error_log( sprintf( 'AbilityGuard rate limiter storage error: %s', $e->getMessage() ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
@@ -250,7 +254,7 @@ final class RateLimiter {
 	}
 
 	/**
-	 * rest_post_dispatch listener: attach IETF RateLimit headers to any
+	 * Listener for `rest_post_dispatch`: attach IETF RateLimit headers to any
 	 * AbilityGuard-routed response. Scoped by route prefix so we don't
 	 * pollute other plugins' REST responses.
 	 *
@@ -342,6 +346,11 @@ final class RateLimiter {
 	 * Read the (prev, curr) counter pair for a policy, in one place so
 	 * the storage round-trip count is visible.
 	 *
+	 * @param Policy $policy       Policy under evaluation.
+	 * @param string $principal    Resolved principal id.
+	 * @param string $ability_hash 16-hex-char hash of the ability name.
+	 * @param int    $now          Current unix timestamp.
+	 *
 	 * @return array{prev:int, curr:int}
 	 */
 	private static function counts_for( Policy $policy, string $principal, string $ability_hash, int $now ): array {
@@ -357,14 +366,19 @@ final class RateLimiter {
 	}
 
 	/**
-	 * Build a bucket key. Layout:
+	 * Build a bucket key.
 	 *
-	 *     ag:rl:v1:{policy_id}:{principal}:{ability_hash16}:{bucket_index}
+	 * Layout: `ag:rl:v1:{policy_id}:{principal}:{ability_hash16}:{bucket_index}`.
 	 *
 	 * For TransientStorage this becomes the option_name; the 191-char
 	 * `wp_options.option_name` limit is comfortably respected because we
 	 * hash the ability name to 16 hex chars (kept from the previous
 	 * implementation).
+	 *
+	 * @param Policy $policy       Policy under evaluation.
+	 * @param string $principal    Resolved principal id.
+	 * @param string $ability_hash 16-hex-char hash of the ability name.
+	 * @param int    $bucket_index Sliding-window bucket index.
 	 */
 	private static function bucket_key( Policy $policy, string $principal, string $ability_hash, int $bucket_index ): string {
 		// Replace `:` with `_` so the key is also valid as a transient
@@ -403,6 +417,8 @@ final class RateLimiter {
 	 *   - The plugin's own /abilityguard/v1/* admin REST routes.
 	 *   - The abilities-api /wp-abilities/v1/abilities/.../run endpoint
 	 *     where ability invocations land.
+	 *
+	 * @param string $route REST route as exposed to the dispatcher.
 	 */
 	private static function is_abilityguard_route( string $route ): bool {
 		if ( '' === $route ) {

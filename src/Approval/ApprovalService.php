@@ -252,8 +252,8 @@ final class ApprovalService {
 			);
 		}
 
-		$stage_roles  = $this->decode_roles( $active_stage['approval_roles'] ?? null );
-		$acting_role  = $this->resolve_acting_role( $user_id, $stage_roles );
+		$stage_roles = $this->decode_roles( $active_stage['approval_roles'] ?? null );
+		$acting_role = $this->resolve_acting_role( $user_id, $stage_roles );
 		if ( array() !== $stage_roles && null === $acting_role ) {
 			return new WP_Error(
 				'abilityguard_approve_wrong_role',
@@ -351,19 +351,6 @@ final class ApprovalService {
 	}
 
 	/**
-	 * Atomic stage claim. Updates the stage row's status only if it's
-	 * still 'waiting' - defeats the race where two approvers both click
-	 * Approve at the same instant. The UPDATE-with-WHERE-current-status
-	 * pattern is the standard relational defence; we don't lean on triggers.
-	 *
-	 * @param int    $approval_id Approval id.
-	 * @param int    $stage_index Stage index to claim.
-	 * @param int    $user_id     User making the decision.
-	 * @param string $status      'approved' | 'rejected'.
-	 *
-	 * @return bool True if this call won the race, false otherwise.
-	 */
-	/**
 	 * Record an approve vote on a stage. Atomically increments
 	 * `decision_count` only when the row is still 'waiting' - defeats the
 	 * race where two approvers click at the same instant. When the post-
@@ -371,10 +358,11 @@ final class ApprovalService {
 	 * 'approved' and `decided_by` is set to the user who pushed it over
 	 * the threshold.
 	 *
-	 * @param int $approval_id    Approval row id.
-	 * @param int $stage_index    Index of the stage to vote on.
-	 * @param int $user_id        Voting user.
-	 * @param int $required_count Quorum threshold.
+	 * @param int         $approval_id    Approval row id.
+	 * @param int         $stage_index    Index of the stage to vote on.
+	 * @param int         $user_id        Voting user.
+	 * @param int         $required_count Quorum threshold.
+	 * @param string|null $acting_role    Optional role label for audit.
 	 *
 	 * @return bool|null `true` when this vote crossed the threshold (caller
 	 *                   should advance to next stage); `false` when the vote
@@ -436,10 +424,11 @@ final class ApprovalService {
 	 * Atomically flip a single stage row from 'waiting' to a new status.
 	 * Used by reject() to claim the active stage in one shot.
 	 *
-	 * @param int    $approval_id Approval id.
-	 * @param int    $stage_index Stage index.
-	 * @param int    $user_id     Deciding user.
-	 * @param string $status      New status.
+	 * @param int         $approval_id Approval id.
+	 * @param int         $stage_index Stage index.
+	 * @param int         $user_id     Deciding user.
+	 * @param string      $status      New status.
+	 * @param string|null $acting_role Optional role label for audit.
 	 */
 	private function claim_stage( int $approval_id, int $stage_index, int $user_id, string $status, ?string $acting_role = null ): bool {
 		global $wpdb;

@@ -74,8 +74,8 @@ final class DryRunTest extends WP_UnitTestCase {
 				// point of the new dry-run contract is that this still
 				// validates even when dry-run is on.
 				'output_schema'       => array(
-					'type'     => 'object',
-					'required' => array( 'changed' ),
+					'type'       => 'object',
+					'required'   => array( 'changed' ),
 					'properties' => array(
 						'changed' => array( 'type' => 'boolean' ),
 					),

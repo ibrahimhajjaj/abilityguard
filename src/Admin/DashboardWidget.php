@@ -1,6 +1,6 @@
 <?php
 /**
- * wp-admin Dashboard widget showing AbilityGuard stats.
+ * Dashboard widget showing AbilityGuard stats in wp-admin.
  *
  * @package AbilityGuard
  */

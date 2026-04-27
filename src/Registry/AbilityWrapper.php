@@ -89,6 +89,8 @@ final class AbilityWrapper {
 	 * @param InvocationContext $ctx               The context the observer pushed.
 	 * @param callable          $original_callback Original callback.
 	 * @param mixed             $input             Input.
+	 *
+	 * @throws \Throwable Re-thrown from the wrapped callback after audit.
 	 */
 	private function run_with_context( InvocationContext $ctx, callable $original_callback, mixed $input ): mixed {
 		$destructive       = (bool) ( $this->safety['destructive'] ?? false );
@@ -157,7 +159,7 @@ final class AbilityWrapper {
 						'duration_ms' => 0,
 					)
 				);
-				$ctx->completed         = true;
+				$ctx->completed        = true;
 				$ctx->approval_handled = true;
 
 				$stages = array();

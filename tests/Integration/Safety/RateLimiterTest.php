@@ -74,7 +74,10 @@ final class RateLimiterTest extends WP_UnitTestCase {
 	}
 
 	/**
-	 * @param array<int, array{id:string,limit:int,window:int}> $policies
+	 * Register a test ability with the given rate-limit policies.
+	 *
+	 * @param string                                            $name     Ability name.
+	 * @param array<int, array{id:string,limit:int,window:int}> $policies Policy entries.
 	 */
 	private function register_ability( string $name, array $policies ): \WP_Ability {
 		return $this->register_via_init(
@@ -94,10 +97,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		);
 	}
 
-	/* ----------------------------------------------------------------- */
-	/* Ported from the previous suite.                                    */
-	/* ----------------------------------------------------------------- */
+	// -----------------------------------------------------------------
+	// Ported from the previous suite.
+	// -----------------------------------------------------------------
 
+	/**
+	 * No policies declared means the limiter is a no-op.
+	 */
 	public function test_no_policies_is_no_op(): void {
 		$user_id = self::factory()->user->create();
 		wp_set_current_user( $user_id );
@@ -126,7 +132,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 
 		$ability = $this->register_ability(
 			'abilityguard-tests/rl-zero',
-			array( array( 'id' => 'noop', 'limit' => 0, 'window' => 60 ) )
+			array(
+				array(
+					'id'     => 'noop',
+					'limit'  => 0,
+					'window' => 60,
+				),
+			)
 		);
 
 		for ( $i = 0; $i < 5; $i++ ) {
@@ -142,9 +154,15 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		add_filter( 'abilityguard_pre_execute_decision', $earlier, 5 );
 
 		try {
-			$ability = $this->register_ability(
+			$ability  = $this->register_ability(
 				'abilityguard-tests/rl-earlier',
-				array( array( 'id' => 'sustained', 'limit' => 1, 'window' => 60 ) )
+				array(
+					array(
+						'id'     => 'sustained',
+						'limit'  => 1,
+						'window' => 60,
+					),
+				)
 			);
 			$response = $ability->execute( array() );
 			$this->assertInstanceOf( WP_Error::class, $response );
@@ -160,7 +178,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 
 		$ability = $this->register_ability(
 			'abilityguard-tests/rl-iso',
-			array( array( 'id' => 'sustained', 'limit' => 1, 'window' => 60 ) )
+			array(
+				array(
+					'id'     => 'sustained',
+					'limit'  => 1,
+					'window' => 60,
+				),
+			)
 		);
 
 		wp_set_current_user( $user_a );
@@ -173,10 +197,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		$this->assertSame( array( 'ok' => true ), $ability->execute( array() ) );
 	}
 
-	/* ----------------------------------------------------------------- */
-	/* Multi-policy block variants.                                       */
-	/* ----------------------------------------------------------------- */
+	// -----------------------------------------------------------------
+	// Multi-policy block variants.
+	// -----------------------------------------------------------------
 
+	/**
+	 * Burst policy blocks while sustained still has headroom.
+	 */
 	public function test_burst_blocks_but_sustained_does_not(): void {
 		$user_id = self::factory()->user->create();
 		wp_set_current_user( $user_id );
@@ -184,8 +211,16 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		$ability = $this->register_ability(
 			'abilityguard-tests/rl-burst-only',
 			array(
-				array( 'id' => 'burst',     'limit' => 2,  'window' => 1   ),
-				array( 'id' => 'sustained', 'limit' => 99, 'window' => 60  ),
+				array(
+					'id'     => 'burst',
+					'limit'  => 2,
+					'window' => 1,
+				),
+				array(
+					'id'     => 'sustained',
+					'limit'  => 99,
+					'window' => 60,
+				),
 			)
 		);
 
@@ -221,8 +256,16 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		$ability = $this->register_ability(
 			'abilityguard-tests/rl-sus-only',
 			array(
-				array( 'id' => 'burst',     'limit' => 5, 'window' => 1   ),
-				array( 'id' => 'sustained', 'limit' => 3, 'window' => 60  ),
+				array(
+					'id'     => 'burst',
+					'limit'  => 5,
+					'window' => 1,
+				),
+				array(
+					'id'     => 'sustained',
+					'limit'  => 3,
+					'window' => 60,
+				),
 			)
 		);
 
@@ -246,8 +289,16 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		$ability = $this->register_ability(
 			'abilityguard-tests/rl-both',
 			array(
-				array( 'id' => 'burst',     'limit' => 2, 'window' => 1   ),
-				array( 'id' => 'sustained', 'limit' => 2, 'window' => 60  ),
+				array(
+					'id'     => 'burst',
+					'limit'  => 2,
+					'window' => 1,
+				),
+				array(
+					'id'     => 'sustained',
+					'limit'  => 2,
+					'window' => 60,
+				),
 			)
 		);
 
@@ -269,7 +320,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		$name    = 'abilityguard-tests/rl-audit';
 		$ability = $this->register_ability(
 			$name,
-			array( array( 'id' => 'sustained', 'limit' => 1, 'window' => 60 ) )
+			array(
+				array(
+					'id'     => 'sustained',
+					'limit'  => 1,
+					'window' => 60,
+				),
+			)
 		);
 
 		$ability->execute( array() );
@@ -283,10 +340,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		$this->assertContains( 'ok', $statuses );
 	}
 
-	/* ----------------------------------------------------------------- */
-	/* Sliding-window math at boundary.                                   */
-	/* ----------------------------------------------------------------- */
+	// -----------------------------------------------------------------
+	// Sliding-window math at boundary.
+	// -----------------------------------------------------------------
 
+	/**
+	 * Sliding-window weighted formula admits at bucket boundary.
+	 */
 	public function test_sliding_window_admits_at_boundary_via_weighted_formula(): void {
 		$user_id = self::factory()->user->create();
 		wp_set_current_user( $user_id );
@@ -297,8 +357,8 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		// before the sustained estimate hits the limit.
 		$base_window = 60;
 		// Align to a bucket boundary so the math is predictable.
-		$first_now   = ( intdiv( 1_700_000_000, $base_window ) ) * $base_window;
-		$second_now  = $first_now + $base_window + 30; // 30s into next bucket.
+		$first_now  = ( intdiv( 1_700_000_000, $base_window ) ) * $base_window;
+		$second_now = $first_now + $base_window + 30; // 30s into next bucket.
 
 		$now = $first_now;
 		add_filter(
@@ -310,7 +370,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 
 		$ability = $this->register_ability(
 			'abilityguard-tests/rl-boundary',
-			array( array( 'id' => 'sustained', 'limit' => 10, 'window' => $base_window ) )
+			array(
+				array(
+					'id'     => 'sustained',
+					'limit'  => 10,
+					'window' => $base_window,
+				),
+			)
 		);
 
 		// Fill the previous bucket.
@@ -337,10 +403,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		$this->assertLessThanOrEqual( 6, $admitted );
 	}
 
-	/* ----------------------------------------------------------------- */
-	/* Retry-After is the max across exhausted policies.                  */
-	/* ----------------------------------------------------------------- */
+	// -----------------------------------------------------------------
+	// Retry-After is the max across exhausted policies.
+	// -----------------------------------------------------------------
 
+	/**
+	 * Retry-After picks the longest reset across exhausted policies.
+	 */
 	public function test_retry_after_is_max_across_exhausted_policies(): void {
 		$user_id = self::factory()->user->create();
 		wp_set_current_user( $user_id );
@@ -353,8 +422,16 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		$ability = $this->register_ability(
 			'abilityguard-tests/rl-retry',
 			array(
-				array( 'id' => 'short', 'limit' => 1, 'window' => 5  ),
-				array( 'id' => 'long',  'limit' => 1, 'window' => 47 ),
+				array(
+					'id'     => 'short',
+					'limit'  => 1,
+					'window' => 5,
+				),
+				array(
+					'id'     => 'long',
+					'limit'  => 1,
+					'window' => 47,
+				),
 			)
 		);
 
@@ -365,10 +442,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		$this->assertSame( 47, $data['retry_after'] );
 	}
 
-	/* ----------------------------------------------------------------- */
-	/* Headers on success and 429 via real REST dispatch.                 */
-	/* ----------------------------------------------------------------- */
+	// -----------------------------------------------------------------
+	// Headers on success and 429 via real REST dispatch.
+	// -----------------------------------------------------------------
 
+	/**
+	 * IETF RateLimit headers attach on both admit and 429 responses.
+	 */
 	public function test_headers_emitted_on_admit_and_429(): void {
 		$user_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
 		wp_set_current_user( $user_id );
@@ -387,8 +467,16 @@ final class RateLimiterTest extends WP_UnitTestCase {
 				'safety'              => array(
 					'rate_limits'      => array(
 						'policies' => array(
-							array( 'id' => 'burst',     'limit' => 1, 'window' => 1  ),
-							array( 'id' => 'sustained', 'limit' => 1, 'window' => 60 ),
+							array(
+								'id'     => 'burst',
+								'limit'  => 1,
+								'window' => 1,
+							),
+							array(
+								'id'     => 'sustained',
+								'limit'  => 1,
+								'window' => 60,
+							),
 						),
 					),
 					'skip_drift_check' => true,
@@ -431,10 +519,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		$this->assertArrayHasKey( 'RateLimit', $bh );
 	}
 
-	/* ----------------------------------------------------------------- */
-	/* Principal three-tier fallback.                                     */
-	/* ----------------------------------------------------------------- */
+	// -----------------------------------------------------------------
+	// Principal three-tier fallback.
+	// -----------------------------------------------------------------
 
+	/**
+	 * Principal resolution falls through user then caller then IP.
+	 */
 	public function test_principal_falls_through_user_then_caller_then_ip(): void {
 		$captured = array();
 		add_filter(
@@ -451,7 +542,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 
 		$ability = $this->register_ability(
 			'abilityguard-tests/rl-principal-1',
-			array( array( 'id' => 'sustained', 'limit' => 1, 'window' => 60 ) )
+			array(
+				array(
+					'id'     => 'sustained',
+					'limit'  => 1,
+					'window' => 60,
+				),
+			)
 		);
 		$ability->execute( array() );
 
@@ -464,7 +561,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		wp_set_current_user( 0 );
 		$ability_caller = $this->register_ability(
 			'abilityguard-tests/rl-principal-2',
-			array( array( 'id' => 'sustained', 'limit' => 99, 'window' => 60 ) )
+			array(
+				array(
+					'id'     => 'sustained',
+					'limit'  => 99,
+					'window' => 60,
+				),
+			)
 		);
 		// Reach into the filter directly to simulate the wrap passing a caller_id.
 		RateLimiter::maybe_block(
@@ -475,7 +578,15 @@ final class RateLimiterTest extends WP_UnitTestCase {
 				'caller_type' => 'mcp',
 				'caller_id'   => 'mcp-server-xyz',
 				'safety'      => array(
-					'rate_limits' => array( 'policies' => array( array( 'id' => 'sustained', 'limit' => 99, 'window' => 60 ) ) ),
+					'rate_limits' => array(
+						'policies' => array(
+							array(
+								'id'     => 'sustained',
+								'limit'  => 99,
+								'window' => 60,
+							),
+						),
+					),
 				),
 			)
 		);
@@ -484,7 +595,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		$_SERVER['REMOTE_ADDR'] = '203.0.113.7';
 		$ability_anon           = $this->register_ability(
 			'abilityguard-tests/rl-principal-3',
-			array( array( 'id' => 'sustained', 'limit' => 99, 'window' => 60 ) )
+			array(
+				array(
+					'id'     => 'sustained',
+					'limit'  => 99,
+					'window' => 60,
+				),
+			)
 		);
 		$ability_anon->execute( array() );
 
@@ -504,7 +621,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 
 		$ability = $this->register_ability(
 			'abilityguard-tests/rl-anon-iso',
-			array( array( 'id' => 'sustained', 'limit' => 1, 'window' => 60 ) )
+			array(
+				array(
+					'id'     => 'sustained',
+					'limit'  => 1,
+					'window' => 60,
+				),
+			)
 		);
 
 		$_SERVER['REMOTE_ADDR'] = '198.51.100.1';
@@ -516,14 +639,17 @@ final class RateLimiterTest extends WP_UnitTestCase {
 
 		// Same IP again → blocked.
 		$_SERVER['REMOTE_ADDR'] = '198.51.100.1';
-		$resp = $ability->execute( array() );
+		$resp                   = $ability->execute( array() );
 		$this->assertInstanceOf( WP_Error::class, $resp );
 	}
 
-	/* ----------------------------------------------------------------- */
-	/* Storage fail-open.                                                 */
-	/* ----------------------------------------------------------------- */
+	// -----------------------------------------------------------------
+	// Storage fail-open.
+	// -----------------------------------------------------------------
 
+	/**
+	 * A throwing storage backend admits the call (Stripe fail-open).
+	 */
 	public function test_storage_exception_admits_call(): void {
 		$user_id = self::factory()->user->create();
 		wp_set_current_user( $user_id );
@@ -556,7 +682,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 
 			$ability = $this->register_ability(
 				'abilityguard-tests/rl-failopen',
-				array( array( 'id' => 'sustained', 'limit' => 1, 'window' => 60 ) )
+				array(
+					array(
+						'id'     => 'sustained',
+						'limit'  => 1,
+						'window' => 60,
+					),
+				)
 			);
 
 			// With a throwing backend, every call must be admitted.
@@ -570,10 +702,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 		}
 	}
 
-	/* ----------------------------------------------------------------- */
-	/* Multisite bucket isolation.                                        */
-	/* ----------------------------------------------------------------- */
+	// -----------------------------------------------------------------
+	// Multisite bucket isolation.
+	// -----------------------------------------------------------------
 
+	/**
+	 * Multisite principals include the blog id so buckets stay isolated.
+	 */
 	public function test_multisite_principal_includes_blog_id(): void {
 		if ( ! is_multisite() ) {
 			$this->markTestSkipped( 'multisite-only test' );
@@ -593,7 +728,13 @@ final class RateLimiterTest extends WP_UnitTestCase {
 
 		$ability = $this->register_ability(
 			'abilityguard-tests/rl-ms',
-			array( array( 'id' => 'sustained', 'limit' => 99, 'window' => 60 ) )
+			array(
+				array(
+					'id'     => 'sustained',
+					'limit'  => 99,
+					'window' => 60,
+				),
+			)
 		);
 		$ability->execute( array() );
 
