@@ -53,7 +53,7 @@ final class ApprovalRoleRoutingTest extends WP_UnitTestCase {
 		$service = new ApprovalService();
 		$id      = $service->request(
 			'role/wrong-role',
-			null,
+			new \stdClass(),
 			'inv-wrong-role',
 			$log_id,
 			array(
@@ -77,7 +77,7 @@ final class ApprovalRoleRoutingTest extends WP_UnitTestCase {
 		$service = new ApprovalService();
 		$id      = $service->request(
 			'role/any-of',
-			null,
+			new \stdClass(),
 			'inv-any-of',
 			$log_id,
 			array(
@@ -105,7 +105,7 @@ final class ApprovalRoleRoutingTest extends WP_UnitTestCase {
 		$service = new ApprovalService();
 		$id      = $service->request(
 			'role/same-user',
-			null,
+			new \stdClass(),
 			'inv-same-user',
 			$log_id,
 			array(
@@ -130,7 +130,7 @@ final class ApprovalRoleRoutingTest extends WP_UnitTestCase {
 		$service = new ApprovalService();
 		$id      = $service->request(
 			'role/same-role',
-			null,
+			new \stdClass(),
 			'inv-same-role',
 			$log_id,
 			array(
@@ -164,7 +164,7 @@ final class ApprovalRoleRoutingTest extends WP_UnitTestCase {
 		$service = new ApprovalService();
 		$id      = $service->request(
 			'role/single-role-chain',
-			null,
+			new \stdClass(),
 			'inv-single-role-chain',
 			$log_id,
 			array(
@@ -197,7 +197,7 @@ final class ApprovalRoleRoutingTest extends WP_UnitTestCase {
 		$service = new ApprovalService();
 		$id      = $service->request(
 			'role/cross-role',
-			null,
+			new \stdClass(),
 			'inv-cross-role',
 			$log_id,
 			array(
@@ -232,7 +232,7 @@ final class ApprovalRoleRoutingTest extends WP_UnitTestCase {
 		$service = new ApprovalService();
 		$id      = $service->request(
 			'role/legacy',
-			null,
+			new \stdClass(),
 			'inv-legacy',
 			$log_id,
 			array(
