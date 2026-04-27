@@ -434,6 +434,86 @@ When the drift check is skipped, the `abilityguard_rollback_drift` action still 
 
 ---
 
+## `dry_run` (1.3+)
+
+Per-call opt-in. When set, the wrap captures the post-snapshot, computes the diff against pre-state, auto-rolls-back, and persists the diff to log_meta. Your `execute_callback` runs normally and its raw result is returned to the caller, so it still validates against `output_schema`.
+
+```php
+'safety' => array(
+    'dry_run'  => true,
+    'snapshot' => array( 'options' => array( 'my_plugin_setting' ) ),
+),
+```
+
+The caller learns "this was a dry run" via three out-of-band channels:
+
+- **Log meta on the audit row:** `dry_run=1`, `dry_run_diff=<json>`, `dry_run_rolled_back=0|1`.
+- **Response headers** (HTTP only): `X-AbilityGuard-Dry-Run: 1`, `X-AbilityGuard-Invocation-Id: <uuid>`.
+- **REST endpoint:** `GET /abilityguard/v1/dry-run/<invocation_id>` returns `{ invocation_id, ability_name, executed_at, rolled_back, diff }`.
+- **PHP helper:** `abilityguard_get_dry_run_result( $invocation_id )` returns the same payload.
+
+If `safety.snapshot` is missing the dry-run still tags the row but `rolled_back` is false (nothing to revert). If rollback itself fails the audit row is set to `error`, `dry_run_failed=<error_code>` is recorded, and the caller gets a `WP_Error` so the inconsistency surfaces.
+
+---
+
+## `rate_limits` (1.3+)
+
+Sliding-window-counter rate limiter, evaluated once per declared policy. The call is admitted only if every policy admits it. Algorithm and storage details follow the Cloudflare/Upstash variant; storage is pluggable (Redis, generic object cache, transients fallback) and selected automatically.
+
+```php
+'safety' => array(
+    'rate_limits' => array(
+        'policies' => array(
+            array( 'id' => 'burst',     'limit' => 5,   'window' => 1   ),
+            array( 'id' => 'sustained', 'limit' => 60,  'window' => 60  ),
+        ),
+    ),
+),
+```
+
+`id` doubles as the wire identifier emitted in the IETF `RateLimit-Policy` and `RateLimit` response headers. On rejection the caller gets `WP_Error('abilityguard_rate_limited')` with HTTP `429` and a `Retry-After` header set to the seconds until the most-restrictive exhausted policy frees at least one slot.
+
+Anonymous calls get an IP-hashed bucket (`sha1(REMOTE_ADDR)[0:12]`), authenticated calls get `u:<user_id>`, MCP/app-password clients with a `caller_id` get `c:<caller_id>`. On multisite the principal is suffixed with `@<blog_id>` so sub-sites are separate trust domains.
+
+Storage replacement (e.g. for strict accounting via Lua-script-backed Redis):
+
+```php
+add_filter( 'abilityguard_rate_limiter_storage', static function ( $auto ) {
+    return new MyStrictRedisStorage();
+} );
+```
+
+Storage exceptions fail-open: a throwing storage MUST NOT block ability execution. The error is logged via `error_log` and the call admitted (Stripe pattern).
+
+---
+
+## `approval_roles` per stage (1.3+)
+
+Inside a `requires_approval.stages[i]` entry, declare `approval_roles` as a list of WP role slugs. Any-of match: a user holding any listed role passes the role gate. The cap check (`cap`) still runs alongside it.
+
+```php
+'safety' => array(
+    'requires_approval' => array(
+        'stages' => array(
+            array(
+                'cap'            => 'manage_woocommerce',
+                'approval_roles' => array( 'editor', 'shop_manager' ),
+            ),
+            array(
+                'cap'            => 'manage_options',
+                'approval_roles' => array( 'administrator' ),
+            ),
+        ),
+    ),
+),
+```
+
+Separation of duties is enforced across the chain: the same user can never decide two consecutive stages. In multi-role chains the same role can't decide two consecutive stages either. Single-role chains (`['administrator'] -> ['administrator']`) skip the role-SOD check, since otherwise the chain would be unsatisfiable; only the same-user rule fires there.
+
+Rejection error codes: `abilityguard_approve_wrong_role`, `abilityguard_sod_same_user`, `abilityguard_sod_same_role`.
+
+---
+
 ## What happens when your ability is invoked
 
 1. **Registration filter.** On `wp_register_ability_args`, AbilityGuard checks for a `safety` key. If present, it wraps your `execute_callback` and strips `safety` before the core registry sees it.

@@ -21,6 +21,7 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `abilityguard_rollback( int\|string $ref, bool $force = false )` | 0.1 | Roll back an invocation. |
 | `abilityguard_snapshot_meta( int $post_id, string[] $keys )` | 0.1 | Read current post_meta values matching the spec shape. |
 | `abilityguard_snapshot_options( string[] $keys )` | 0.1 | Read current option values matching the spec shape. |
+| `abilityguard_get_dry_run_result( string $invocation_id )` | 1.3 | Fetch the persisted diff for a previous dry-run invocation. Returns `array{invocation_id,ability_name,executed_at,rolled_back,diff}` or `WP_Error`. Same shape as the `/dry-run/<id>` REST endpoint. |
 
 ### PHP classes (public, namespaced)
 
@@ -31,6 +32,8 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `AbilityGuard\Snapshot\Collector\CollectorRegistry` | 0.8 | `register( $surface, $collector )`, `has( $surface )`, `defaults()` - process-wide registry of custom collectors layered over the built-ins. `safety.collectors` writes to this. |
 | `AbilityGuard\Snapshot\Collector\CollectorInterface` | 0.1 | The contract custom collectors must implement: `collect( $spec ): array` and `restore( array $captured ): void`. |
 | `AbilityGuard\Snapshot\FileBlobStore` | 0.9 | Sidecar staging-dir blob store powering `full_content`: `put($bytes)`, `get($hash)`, `has($hash)`, `delete($hash)`, `prune_except($keep_hashes)`, `staging_dir()`. |
+| `AbilityGuard\Safety\DryRun` | 1.3 | `DryRun::fetch_result( string $invocation_id ): array\|WP_Error` returns the persisted diff for a dry-run invocation. |
+| `AbilityGuard\Safety\RateLimit\Storage` | 1.3 | Pluggable storage interface for the rate limiter. Methods: `increment( string $key, int $window ): int`, `get_pair( string $policy_key, int $window, int $now ): array{prev:int,curr:int,elapsed:int}`, `reset( string $key ): void`, `is_atomic(): bool`. Override via the `abilityguard_rate_limiter_storage` filter. |
 
 ### Safety config keys (passed to `wp_register_ability` under `safety`)
 
@@ -45,6 +48,9 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `skip_drift_check` | 0.6 | bool - when true the wrapper auto-writes a `log_meta` row that RollbackService reads to bypass drift |
 | `lock_timeout` | 0.4 | int - seconds; 0 = fail fast; -1 = lock disabled |
 | `collectors` | 0.8 | `array<string, CollectorInterface>` - register custom collectors for non-built-in surfaces. Keys matching built-in surfaces (`post_meta`, `options`, `taxonomy`, `user_role`, `files`) are silently ignored. |
+| `dry_run` | 1.3 | bool - per-call opt-in. When true the wrap captures the post-snapshot, computes the diff, auto-rolls-back, and persists `dry_run`/`dry_run_diff`/`dry_run_rolled_back` log_meta. The original execute result is returned untouched so it validates against `output_schema`. |
+| `rate_limits` | 1.3 | `array{policies: array<int, array{id: string, limit: int, window: int}>}` - one or more sliding-window-counter policies; the call is admitted iff every policy admits it. `id` becomes the wire identifier in `RateLimit-Policy` / `RateLimit` headers. |
+| `approval_roles` | 1.3 | `string[]` - per-stage WP role slugs (any-of). Set inside a `requires_approval.stages[i]` entry alongside `cap`. Pairs with separation-of-duties enforcement: same user (always) or same role in a multi-role chain (1.3+) cannot decide consecutive stages. |
 
 ### Snapshot surfaces (keys returned by the `snapshot` resolver)
 
@@ -95,6 +101,12 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `abilityguard_files_critical_suffixes` | 0.7 | `CriticalFileRegistry::all()` | Final say over which path suffixes are "critical" under `critical_hash` |
 | `abilityguard_max_file_bytes` | 0.9 | `262144` (256 KB) | Per-file cap for `full_content` capture. Files over this are fingerprinted-only with a doing-it-wrong notice. |
 | `abilityguard_file_blob_dir` | 0.9 | `wp-content/abilityguard-staging` | Override the staging directory used by FileBlobStore (tests / unusual hosts). |
+| `abilityguard_pre_execute_decision` | 1.3 | `null` | Enforcement seam fired before execute. Signature: `( ?WP_Error $decision, string $ability_name, mixed $input, array $context ): ?WP_Error`. Returning a `WP_Error` short-circuits and finalizes the audit row as `error`. RateLimiter and other gates plug in here. |
+| `abilityguard_post_execute_result` | 1.3 | passthrough | Post-execute transform seam. Signature: `( mixed $result, string $ability_name, mixed $input, array $context ): mixed`. Fires after post-snapshot capture, before output validation. DryRun uses this to roll back and tag the audit row while returning the original result untouched. |
+| `abilityguard_rate_limiter_storage` | 1.3 | auto-detect | Override the storage backend the rate limiter uses. Receives the auto-picked instance, returns a `Storage` impl. Used to swap in Lua-script-backed Redis for strict accounting. |
+| `abilityguard_rate_limit_principal` | 1.3 | three-tier | Override the bucket-key principal. Receives `( string $principal, string $ability_name, array $context )` and returns the principal string. Default: `u:{user_id}` / `c:{caller_id}` / `ip:{sha1[0:12]}` with `@{blog_id}` suffix on multisite. |
+| `abilityguard_rate_limit_window_seconds` | 1.3 | `(value from policy)` | Per-policy tunable window override. Signature: `( int $window, string $policy_id, string $ability_name ): int`. |
+| `abilityguard_retention_days_by_status` | 1.3 | `[]` | Per-status retention map: `[ 'pending' => 7, 'ok' => 90, 'error' => 180, 'rejected' => 30, 'rolled_back' => 90 ]`. Empty array keeps the legacy `_normal`/`_destructive` path. |
 
 ### REST endpoints (namespace `abilityguard/v1`)
 
@@ -113,6 +125,8 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | `GET` | `/approval/export` | 0.8 | `manage_abilityguard_approvals` |
 | `GET` | `/retention` | 0.5 | `manage_options` |
 | `POST` | `/retention/prune` | 0.7 | `manage_options` |
+| `GET` | `/stats` | 1.3 | `manage_options` - status counts, p50/p95 timings, top abilities. Complements WordPress/ai PR #437 (provider-HTTP layer); this is ability-execution layer. |
+| `GET` | `/dry-run/<invocation_id>` | 1.3 | `manage_options` - returns the diff persisted by a dry-run invocation. |
 
 ### WP-CLI subcommands
 
@@ -134,6 +148,16 @@ Pre-1.0 (where we are now), the public API is provisional but we still bump MINO
 | Capability | Since | Default role assignment |
 |---|---|---|
 | `manage_abilityguard_approvals` | 0.4 | `administrator` (granted on plugin activation) |
+
+### Response headers (HTTP only)
+
+| Header | Since | When | Value |
+|---|---|---|---|
+| `X-AbilityGuard-Dry-Run` | 1.3 | Set on every response when `safety.dry_run` was active for this invocation. | `1` |
+| `X-AbilityGuard-Invocation-Id` | 1.3 | Paired with `X-AbilityGuard-Dry-Run`. Lets the caller fetch `/dry-run/<id>` to read the diff. | UUID v4 |
+| `RateLimit-Policy` | 1.3 | Emitted on AbilityGuard ability routes when a rate-limit policy ran. | Structured field per `draft-ietf-httpapi-ratelimit-headers-10`, e.g. `"burst";q=5;w=1, "sustained";q=60;w=60` |
+| `RateLimit` | 1.3 | Emitted alongside `RateLimit-Policy`. | Per-policy remaining + reset, e.g. `"burst";r=4;t=1, "sustained";r=42;t=37` |
+| `Retry-After` | 1.3 | Emitted on `429` responses. | Seconds until the most-restrictive exhausted policy releases at least one slot. RFC-7231. |
 
 ## What's NOT public
 

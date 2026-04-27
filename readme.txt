@@ -4,7 +4,7 @@ Tags: abilities-api, mcp, audit, rollback, safety
 Requires at least: 6.9
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 1.2.0
+Stable tag: 1.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -92,6 +92,16 @@ Per-surface MySQL advisory locks (GET_LOCK) serialise capture + execute so simul
 Yes. Redaction uses AES-256-GCM envelopes so rollback can still restore the original value when the encryption key is intact.
 
 == Changelog ==
+
+= 1.3.0 =
+* Sliding-window-counter rate limiter with multi-policy support (burst + sustained), pluggable storage (Redis / object cache / transient), and IETF draft RateLimit headers.
+* Dry-run mode: per-call `safety.dry_run` previews a destructive ability, persists the diff, auto-rolls-back, and surfaces details via `/dry-run/<id>` REST endpoint and `abilityguard_get_dry_run_result()` helper. Result returns untouched so it validates against `output_schema`.
+* Approval queue gains per-stage role routing (`approval_roles`) and separation-of-duties enforcement across the chain.
+* Per-status retention via `abilityguard_retention_days_by_status`.
+* `/stats` REST endpoint and admin dashboard widget (counts, p50/p95, top abilities).
+* Wrapper split into observability listeners on `wp_before_execute_ability` / `wp_after_execute_ability` plus an enforcement seam (`abilityguard_pre_execute_decision` filter) for plugin extensions.
+* Reads `meta.annotations.destructive` directly from core (WP 6.9 surface), no parallel safety metadata.
+* Requires WP 6.9; pre-6.9 fallback path removed.
 
 = 1.2.0 =
 * Parallel multi-stage approval chains with optional per-stage user pinning.
