@@ -63,10 +63,12 @@ final class RegistrationFilter {
 			return $args;
 		}
 
-		// Reconcile destructive flag with core's meta.annotations (WP 6.9).
-		// Source of truth is `meta.annotations.destructive`; `safety.destructive`
-		// is a legacy alias kept working via the shim below.
-		$args = $this->reconcile_destructive( $args, $name );
+		// Mirror core's meta.annotations.destructive into the safety array so
+		// the wrapper sees a single boolean. Core defines the canonical key
+		// in WP 6.9; we don't carry our own.
+		if ( isset( $args['meta']['annotations']['destructive'] ) && null !== $args['meta']['annotations']['destructive'] ) {
+			$args['safety']['destructive'] = (bool) $args['meta']['annotations']['destructive'];
+		}
 
 		// Register custom collectors declared on this ability so SnapshotService
 		// + RollbackService can find them at capture and rollback time. Keys
@@ -97,64 +99,4 @@ final class RegistrationFilter {
 		return $args;
 	}
 
-	/**
-	 * Names already warned for, so the deprecation fires at most once per ability.
-	 *
-	 * @var array<string, true>
-	 */
-	private static array $warned_legacy_destructive = array();
-
-	/**
-	 * Reconcile destructive flag between legacy `safety.destructive` and core's
-	 * `meta.annotations.destructive` (added to WP_Ability in WordPress 6.9).
-	 *
-	 * Resolution:
-	 *   1. If `meta.annotations.destructive` is set, that wins.
-	 *   2. Else if `safety.destructive` is set, mirror it into meta.annotations
-	 *      and emit a one-time `_doing_it_wrong`.
-	 * In either case the resolved value is also written back into
-	 * `safety.destructive` so the AbilityWrapper (which still reads from the
-	 * safety array at execute time) sees the same value.
-	 *
-	 * @param array<string, mixed> $args Ability args.
-	 * @param string               $name Ability name.
-	 *
-	 * @return array<string, mixed>
-	 */
-	private function reconcile_destructive( array $args, string $name ): array {
-		$annotations = array();
-		if ( isset( $args['meta']['annotations'] ) && is_array( $args['meta']['annotations'] ) ) {
-			$annotations = $args['meta']['annotations'];
-		}
-
-		$has_legacy = array_key_exists( 'destructive', $args['safety'] );
-		$has_meta   = array_key_exists( 'destructive', $annotations ) && null !== $annotations['destructive'];
-
-		if ( $has_legacy ) {
-			if ( ! isset( self::$warned_legacy_destructive[ $name ] ) ) {
-				self::$warned_legacy_destructive[ $name ] = true;
-				if ( function_exists( '_doing_it_wrong' ) ) {
-					_doing_it_wrong(
-						'AbilityGuard',
-						"AbilityGuard: 'safety.destructive' is deprecated. Use 'meta.annotations.destructive' (shipped in WordPress 6.9).",
-						'1.3.0'
-					);
-				}
-			}
-
-			if ( ! $has_meta ) {
-				$annotations['destructive'] = (bool) $args['safety']['destructive'];
-				$args['meta']                = is_array( $args['meta'] ?? null ) ? $args['meta'] : array();
-				$args['meta']['annotations'] = $annotations;
-			}
-		}
-
-		// Make sure the wrapper sees the canonical value. After this, both
-		// surfaces agree.
-		if ( array_key_exists( 'destructive', $annotations ) && null !== $annotations['destructive'] ) {
-			$args['safety']['destructive'] = (bool) $annotations['destructive'];
-		}
-
-		return $args;
-	}
 }
