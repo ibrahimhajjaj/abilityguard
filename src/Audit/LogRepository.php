@@ -126,6 +126,115 @@ class LogRepository {
 	}
 
 	/**
+	 * Aggregate stats across the audit log.
+	 *
+	 * Returns a tuple of:
+	 *   - counts: status histogram (ok/error/rolled_back/pending/rejected)
+	 *   - timings_ms: p50/p95 over duration_ms for finished rows (ok|error|rolled_back)
+	 *   - top_abilities: top 10 ability_name by row count (any status)
+	 *
+	 * Each section is a single query. p95 uses LIMIT/OFFSET because MySQL 5.7
+	 * has no PERCENTILE_CONT and we don't want to depend on window functions
+	 * (MySQL 8+) given WordPress's supported floor.
+	 *
+	 * @return array{counts: array<string,int>, timings_ms: array<string,?int>, top_abilities: array<int, array{name:string,count:int}>}
+	 */
+	public function stats(): array {
+		global $wpdb;
+		$table = Installer::table( 'log' );
+
+		// Status histogram. GROUP BY is single round-trip and uses the
+		// existing KEY status index from Installer::install().
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$rows = $wpdb->get_results( "SELECT status, COUNT(*) AS c FROM {$table} GROUP BY status", ARRAY_A );
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		$counts = array(
+			'ok'          => 0,
+			'error'       => 0,
+			'rolled_back' => 0,
+			'pending'     => 0,
+			'rejected'    => 0,
+			'approved'    => 0,
+		);
+		if ( is_array( $rows ) ) {
+			foreach ( $rows as $r ) {
+				$status = (string) ( $r['status'] ?? '' );
+				if ( '' === $status ) {
+					continue;
+				}
+				$counts[ $status ] = (int) ( $r['c'] ?? 0 );
+			}
+		}
+
+		// `approved` is not a log status (the log moves pending → ok/error/rolled_back
+		// after approval). Source it from the approvals table so the dashboard's
+		// "approved" tile reflects approver decisions, not log execution outcome.
+		$approvals_table = Installer::table( 'approvals' );
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$counts['approved'] = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$approvals_table} WHERE status = 'approved'" );
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		// Timings. Restrict to finished executions so pending rows (which carry
+		// duration_ms = 0) don't drag p50 to zero on quiet sites.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$total = (int) $wpdb->get_var(
+			"SELECT COUNT(*) FROM {$table} WHERE status IN ('ok','error','rolled_back')"
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		$p50 = null;
+		$p95 = null;
+		if ( $total > 0 ) {
+			$p50_offset = (int) floor( 0.50 * ( $total - 1 ) );
+			$p95_offset = (int) floor( 0.95 * ( $total - 1 ) );
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+			$p50 = $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT duration_ms FROM {$table} WHERE status IN ('ok','error','rolled_back') ORDER BY duration_ms ASC LIMIT 1 OFFSET %d",
+					$p50_offset
+				)
+			);
+			$p95 = $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT duration_ms FROM {$table} WHERE status IN ('ok','error','rolled_back') ORDER BY duration_ms ASC LIMIT 1 OFFSET %d",
+					$p95_offset
+				)
+			);
+			// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+			$p50 = null === $p50 ? null : (int) $p50;
+			$p95 = null === $p95 ? null : (int) $p95;
+		}
+
+		// Top abilities by frequency. KEY ability_name covers the GROUP BY.
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$top_rows = $wpdb->get_results(
+			"SELECT ability_name, COUNT(*) AS c FROM {$table} GROUP BY ability_name ORDER BY c DESC, ability_name ASC LIMIT 10",
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		$top_abilities = array();
+		if ( is_array( $top_rows ) ) {
+			foreach ( $top_rows as $r ) {
+				$top_abilities[] = array(
+					'name'  => (string) ( $r['ability_name'] ?? '' ),
+					'count' => (int) ( $r['c'] ?? 0 ),
+				);
+			}
+		}
+
+		return array(
+			'counts'        => $counts,
+			'timings_ms'    => array(
+				'p50' => $p50,
+				'p95' => $p95,
+			),
+			'top_abilities' => $top_abilities,
+		);
+	}
+
+	/**
 	 * Update the status field on a row.
 	 *
 	 * @param int    $id     Log id.

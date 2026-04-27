@@ -35,6 +35,7 @@ use WP_REST_Server;
  *  - POST /abilityguard/v1/approval/<id>/approve   (manage_abilityguard_approvals)
  *  - POST /abilityguard/v1/approval/<id>/reject    (manage_abilityguard_approvals)
  *  - GET  /abilityguard/v1/retention               (manage_options)
+ *  - GET  /abilityguard/v1/stats                   (manage_options)
  */
 final class RestController {
 
@@ -184,6 +185,16 @@ final class RestController {
 						'minimum' => 0,
 					),
 				),
+			)
+		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/stats',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'permission_callback' => array( __CLASS__, 'check_perms' ),
+				'callback'            => array( __CLASS__, 'get_stats' ),
 			)
 		);
 
@@ -623,6 +634,19 @@ final class RestController {
 		unset( $row );
 
 		return new WP_REST_Response( $rows, 200 );
+	}
+
+	/**
+	 * GET /stats - aggregate counts, timing percentiles, and top abilities.
+	 *
+	 * Complements WordPress/ai PR #437 (provider-HTTP scope). This endpoint
+	 * reports on the ability-execution layer: outcomes recorded by the audit
+	 * logger, not provider request/response counts.
+	 *
+	 * @param \WP_REST_Request $req Unused.
+	 */
+	public static function get_stats( WP_REST_Request $req ): WP_REST_Response { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+		return new WP_REST_Response( ( new LogRepository() )->stats(), 200 );
 	}
 
 	/**

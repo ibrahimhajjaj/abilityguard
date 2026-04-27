@@ -49,6 +49,7 @@ final class Plugin {
 
 		Cli\Command::register();
 		Admin\AdminMenu::register();
+		Admin\DashboardWidget::register();
 		Admin\RestController::register();
 
 		do_action( 'abilityguard_booted' );
