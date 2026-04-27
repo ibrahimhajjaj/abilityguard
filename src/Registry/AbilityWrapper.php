@@ -4,9 +4,8 @@
  * filter + execute + error-path audit). Observability (snapshot capture,
  * audit-row creation, completion actions) lives in InvocationObserver and
  * runs from the WP 6.9 wp_before_execute_ability / wp_after_execute_ability
- * hooks. When no context has been pushed by the observer (pre-6.9 hosts,
- * direct callable invocation) this class falls back to running the full
- * legacy flow on its own so behavior is unchanged.
+ * hooks. If no observer context exists (callable invoked outside
+ * WP_Ability::execute), the wrap is a transparent pass-through.
  *
  * @package AbilityGuard
  */
@@ -16,7 +15,6 @@ declare( strict_types=1 );
 namespace AbilityGuard\Registry;
 
 use AbilityGuard\Approval\ApprovalService;
-use AbilityGuard\Audit\LogMeta;
 use AbilityGuard\Concurrency\Lock;
 use AbilityGuard\Installer;
 use AbilityGuard\Contracts\AuditLoggerInterface;
@@ -73,11 +71,12 @@ final class AbilityWrapper {
 		return function ( $input = null ) use ( $original_callback ) {
 			$ctx = InvocationContext::find_for( $this->ability_name );
 
-			// Legacy path: no observer context (pre-6.9 host, or callable
-			// invoked directly without going through WP_Ability::execute).
-			// Run the full self-contained flow so behavior matches v1.2.
+			// No observer context: the callable was invoked outside the
+			// abilities-api flow (no wp_before_execute_ability fired). Pass
+			// straight through without enforcement or audit. The plugin's
+			// real entry point is WP_Ability::execute().
 			if ( null === $ctx ) {
-				return $this->run_legacy( $original_callback, $input );
+				return $original_callback( $input );
 			}
 
 			return $this->run_with_context( $ctx, $original_callback, $input );
@@ -375,260 +374,6 @@ final class AbilityWrapper {
 		if ( null !== $top && $top->invocation_id === $ctx->invocation_id ) {
 			InvocationContext::pop();
 		}
-	}
-
-	/**
-	 * Pre-6.9 / no-observer fallback. Mirrors the v1.2 wrap end to end so
-	 * behavior is unchanged when wp_before_execute_ability never fires.
-	 *
-	 * @param callable $original_callback Original.
-	 * @param mixed    $input             Input.
-	 */
-	private function run_legacy( callable $original_callback, mixed $input ): mixed {
-		$invocation_id        = InvocationHelpers::uuid4();
-		$parent_invocation_id = InvocationStack::current();
-		$destructive          = (bool) ( $this->safety['destructive'] ?? false );
-		$requires_approval    = ! empty( $this->safety['requires_approval'] );
-
-		$lock_key       = null;
-		$lock_inherited = false;
-		$lock_timeout   = $this->resolve_lock_timeout();
-		$has_spec       = ! empty( $this->safety['snapshot'] );
-
-		if ( $has_spec && $lock_timeout >= 0 ) {
-			$resolved_spec = $this->resolve_spec_for_lock( $input );
-			if ( array() !== $resolved_spec ) {
-				$lock_key = Lock::key_for_spec( $resolved_spec );
-				if ( null !== $parent_invocation_id && Lock::is_held( $lock_key ) ) {
-					$lock_inherited = true;
-				} elseif ( ! Lock::acquire( $lock_key, $lock_timeout ) ) {
-					return new WP_Error(
-						'abilityguard_lock_timeout',
-						'Another invocation is in progress for the same surfaces. Please retry.',
-						array( 'status' => 429 )
-					);
-				}
-			}
-		}
-
-		// Approval-pending short-circuit (legacy: insert pending row, return 202).
-		if ( $requires_approval && ! ApprovalService::is_approving() ) {
-			$snapshot = $this->snapshots->capture( $invocation_id, $this->safety, $input );
-
-			$log_id = $this->audit->log(
-				array(
-					'invocation_id'        => $invocation_id,
-					'parent_invocation_id' => $parent_invocation_id,
-					'ability_name'         => $this->ability_name,
-					'caller_type'          => InvocationHelpers::detect_caller_type(),
-					'user_id'              => InvocationHelpers::current_user_id(),
-					'args_json'            => InvocationHelpers::encode_or_null( InvocationHelpers::redact_value( $this->safety, $input, 'input' ) ),
-					'result_json'          => null,
-					'status'               => 'pending',
-					'destructive'          => $destructive,
-					'duration_ms'          => 0,
-					'pre_hash'             => $snapshot['pre_hash'],
-					'post_hash'            => null,
-					'snapshot_id'          => $snapshot['snapshot_id'],
-				)
-			);
-
-			if ( null !== $lock_key && ! $lock_inherited ) {
-				Lock::release( $lock_key );
-			}
-
-			$stages = array();
-			if ( is_array( $this->safety['requires_approval'] ?? null )
-				&& isset( $this->safety['requires_approval']['stages'] )
-				&& is_array( $this->safety['requires_approval']['stages'] )
-			) {
-				$stages = $this->safety['requires_approval']['stages'];
-			}
-			$approval_service = new ApprovalService();
-			$approval_id      = $approval_service->request( $this->ability_name, $input, $invocation_id, $log_id, $stages );
-
-			return new WP_Error(
-				'abilityguard_pending_approval',
-				sprintf( 'Ability "%s" requires approval before execution.', $this->ability_name ),
-				array(
-					'status'      => 202,
-					'approval_id' => $approval_id,
-					'log_id'      => $log_id,
-				)
-			);
-		}
-
-		try {
-			$snapshot = $this->snapshots->capture( $invocation_id, $this->safety, $input );
-
-			do_action(
-				'abilityguard_invocation_started',
-				$invocation_id,
-				$this->ability_name,
-				$input,
-				array(
-					'destructive' => $destructive,
-					'snapshot_id' => (int) ( $snapshot['snapshot_id'] ?? 0 ),
-					'caller_type' => InvocationHelpers::detect_caller_type(),
-				)
-			);
-
-			// Pre-execute decision filter (legacy path also exposes it).
-			$decision = apply_filters(
-				'abilityguard_pre_execute_decision',
-				null,
-				$this->ability_name,
-				$input,
-				array(
-					'invocation_id' => $invocation_id,
-					'caller_type'   => InvocationHelpers::detect_caller_type(),
-					'caller_id'     => McpContext::current(),
-					'destructive'   => $destructive,
-					'safety'        => $this->safety,
-				)
-			);
-			if ( $decision instanceof WP_Error ) {
-				$this->write_legacy_audit_row( $invocation_id, $parent_invocation_id, $snapshot, $input, null, 'error', 0, $destructive );
-				return $decision;
-			}
-
-			$start  = hrtime( true );
-			$result = null;
-			$status = 'ok';
-			$thrown = null;
-			InvocationStack::push( $invocation_id );
-			try {
-				$result = $original_callback( $input );
-				if ( is_wp_error( $result ) ) {
-					$status = 'error';
-				}
-			} catch ( Throwable $e ) {
-				$status = 'error';
-				$thrown = $e;
-			} finally {
-				InvocationStack::pop();
-			}
-			$duration_ms = (int) ( ( hrtime( true ) - $start ) / 1_000_000 );
-
-			if ( 'error' === $status ) {
-				do_action( 'abilityguard_invocation_error', $invocation_id, $this->ability_name, $thrown, $result, $duration_ms );
-				if ( null !== $thrown ) {
-					do_action( 'abilityguard_invocation_failed', $invocation_id, $this->ability_name, $thrown, $duration_ms );
-				}
-			}
-
-			if ( 'ok' === $status && null !== $snapshot['snapshot_id'] ) {
-				$this->snapshots->capture_post( $snapshot['snapshot_id'], $this->safety, $input );
-			}
-
-			$legacy_log_id = $this->write_legacy_audit_row( $invocation_id, $parent_invocation_id, $snapshot, $input, $thrown ? null : $result, $status, $duration_ms, $destructive );
-
-			if ( null !== $thrown ) {
-				throw $thrown;
-			}
-
-			// Post-execute extension seam (parity with run_with_context).
-			// See the docblock there for filter semantics.
-			if ( 'ok' === $status ) {
-				$result = apply_filters(
-					'abilityguard_post_execute_result',
-					$result,
-					$this->ability_name,
-					$input,
-					array(
-						'invocation_id' => $invocation_id,
-						'log_id'        => $legacy_log_id,
-						'snapshot_id'   => (int) ( $snapshot['snapshot_id'] ?? 0 ),
-						'caller_type'   => InvocationHelpers::detect_caller_type(),
-						'caller_id'     => McpContext::current(),
-						'destructive'   => $destructive,
-						'safety'        => $this->safety,
-						'duration_ms'   => $duration_ms,
-					)
-				);
-			}
-			return $result;
-		} finally {
-			if ( null !== $lock_key && ! $lock_inherited ) {
-				Lock::release( $lock_key );
-			}
-		}
-	}
-
-	/**
-	 * Insert a single audit row (legacy path).
-	 *
-	 * @param string               $invocation_id        UUID.
-	 * @param string|null          $parent_invocation_id Parent UUID.
-	 * @param array<string, mixed> $snapshot             Snapshot row.
-	 * @param mixed                $input                Input.
-	 * @param mixed                $result               Result (null on error).
-	 * @param string               $status               'ok' or 'error'.
-	 * @param int                  $duration_ms          Duration.
-	 * @param bool                 $destructive          Destructive flag.
-	 */
-	private function write_legacy_audit_row(
-		string $invocation_id,
-		?string $parent_invocation_id,
-		array $snapshot,
-		mixed $input,
-		mixed $result,
-		string $status,
-		int $duration_ms,
-		bool $destructive
-	): int {
-		$mcp_id      = McpContext::current();
-		$caller_type = null !== $mcp_id ? 'mcp' : InvocationHelpers::detect_caller_type();
-
-		$post_hash = InvocationHelpers::hash_or_null( $result );
-
-		$args_shape   = InvocationHelpers::shape_for_log( $this->safety, $input, 'input', 'args', 'abilityguard_max_args_bytes', 65536 );
-		$result_shape = InvocationHelpers::shape_for_log( $this->safety, $result, 'result', 'result', 'abilityguard_max_result_bytes', 131072 );
-
-		if ( $args_shape['truncated'] || $result_shape['truncated'] ) {
-			InvocationHelpers::maybe_doing_it_wrong( $this->ability_name );
-		}
-
-		$log_id = $this->audit->log(
-			array(
-				'invocation_id'        => $invocation_id,
-				'parent_invocation_id' => $parent_invocation_id,
-				'ability_name'         => $this->ability_name,
-				'caller_type'          => $caller_type,
-				'caller_id'            => $mcp_id,
-				'user_id'              => InvocationHelpers::current_user_id(),
-				'args_json'            => $args_shape['json'],
-				'result_json'          => $result_shape['json'],
-				'status'               => $status,
-				'destructive'          => $destructive,
-				'duration_ms'          => $duration_ms,
-				'pre_hash'             => $snapshot['pre_hash'],
-				'post_hash'            => $post_hash,
-				'snapshot_id'          => $snapshot['snapshot_id'],
-			)
-		);
-
-		if ( $log_id > 0 && ! empty( $this->safety['skip_drift_check'] ) ) {
-			LogMeta::set( $log_id, 'skip_drift_check', '1' );
-		}
-
-		do_action(
-			'abilityguard_invocation_completed',
-			$invocation_id,
-			$this->ability_name,
-			$status,
-			$duration_ms,
-			array(
-				'destructive'      => $destructive,
-				'caller_type'      => $caller_type,
-				'caller_id'        => $mcp_id,
-				'snapshot_id'      => (int) ( $snapshot['snapshot_id'] ?? 0 ),
-				'args_truncated'   => (bool) $args_shape['truncated'],
-				'result_truncated' => (bool) $result_shape['truncated'],
-			)
-		);
-
-		return $log_id;
 	}
 
 	/**

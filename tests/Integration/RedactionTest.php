@@ -15,7 +15,6 @@ namespace AbilityGuard\Tests\Integration;
 use AbilityGuard\Audit\AuditLogger;
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Installer;
-use AbilityGuard\Registry\AbilityWrapper;
 use AbilityGuard\Rollback\RollbackService;
 use AbilityGuard\Snapshot\SnapshotService;
 use AbilityGuard\Snapshot\SnapshotStore;
@@ -27,6 +26,8 @@ use WP_UnitTestCase;
  * Redaction end-to-end tests - runs inside wp-env against real $wpdb.
  */
 final class RedactionTest extends WP_UnitTestCase {
+
+	use AbilityRegistrationTrait;
 
 	/**
 	 * Monotonic counter so every test gets a unique ability name.
@@ -50,33 +51,19 @@ final class RedactionTest extends WP_UnitTestCase {
 	}
 
 	/**
-	 * Build a fresh AbilityWrapper, invoke it, and return the logged row.
+	 * Register an ability through the abilities-api flow, execute it, and
+	 * return the resulting audit log row.
 	 *
 	 * @param array<string, mixed> $safety   Safety config.
-	 * @param mixed                $input    Input passed to the ability.
-	 * @param callable             $callback Inner ability callback.
+	 * @param mixed                $input    Input passed to execute().
+	 * @param callable             $callback execute_callback.
 	 *
 	 * @return array<string, mixed>
 	 */
 	private function run_ability( array $safety, mixed $input, callable $callback ): array {
 		++self::$counter;
-		$ability_name = 'redaction-test/ability-' . self::$counter;
-
-		$wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			$ability_name,
-			$safety
-		);
-
-		$wrapped = $wrapper->wrap( $callback );
-		$wrapped( $input );
-
-		$repo = new LogRepository();
-		$rows = $repo->list( array( 'ability_name' => $ability_name ) );
-		$this->assertNotEmpty( $rows, "Log row not found for {$ability_name}" );
-
-		return $rows[0];
+		$name = 'abilityguard-tests/redaction-' . self::$counter;
+		return $this->execute_and_get_log_row( $name, $safety, $callback, $input );
 	}
 
 	/**

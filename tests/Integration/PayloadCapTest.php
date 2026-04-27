@@ -9,10 +9,8 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Tests\Integration;
 
-use AbilityGuard\Audit\AuditLogger;
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Installer;
-use AbilityGuard\Registry\AbilityWrapper;
 use AbilityGuard\Snapshot\SnapshotService;
 use AbilityGuard\Snapshot\SnapshotStore;
 use AbilityGuard\Support\Hash;
@@ -26,6 +24,10 @@ use WP_UnitTestCase;
  * plugin is not loaded. Snapshot-only tests run regardless.
  */
 final class PayloadCapTest extends WP_UnitTestCase {
+
+	use AbilityRegistrationTrait;
+
+	private static int $counter = 0;
 
 	protected function setUp(): void {
 		parent::setUp();
@@ -42,22 +44,15 @@ final class PayloadCapTest extends WP_UnitTestCase {
 		}
 
 		$large_result = array( 'data' => str_repeat( 'x', 200_000 ) );
-
-		$wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			'test/large-result',
-			array( 'destructive' => false )
+		++self::$counter;
+		$name = 'abilityguard-tests/payload-large-' . self::$counter;
+		$row  = $this->execute_and_get_log_row(
+			$name,
+			array( 'destructive' => false ),
+			static fn() => $large_result
 		);
 
-		$callback = $wrapper->wrap( static fn() => $large_result );
-		$callback( null );
-
-		$repo = new LogRepository();
-		$rows = $repo->list( array( 'ability_name' => 'test/large-result' ) );
-		$this->assertCount( 1, $rows );
-
-		$result_json = $rows[0]['result_json'];
+		$result_json = $row['result_json'];
 		$this->assertNotNull( $result_json );
 
 		$decoded = json_decode( $result_json, true );
@@ -75,21 +70,15 @@ final class PayloadCapTest extends WP_UnitTestCase {
 			$this->markTestSkipped( 'abilities-api plugin not loaded' );
 		}
 
-		$wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			'test/small-result',
-			array( 'destructive' => false )
+		++self::$counter;
+		$name = 'abilityguard-tests/payload-small-' . self::$counter;
+		$row  = $this->execute_and_get_log_row(
+			$name,
+			array( 'destructive' => false ),
+			static fn() => array( 'ok' => true )
 		);
 
-		$callback = $wrapper->wrap( static fn() => array( 'ok' => true ) );
-		$callback( null );
-
-		$repo = new LogRepository();
-		$rows = $repo->list( array( 'ability_name' => 'test/small-result' ) );
-		$this->assertCount( 1, $rows );
-
-		$result_json = $rows[0]['result_json'];
+		$result_json = $row['result_json'];
 		$this->assertNotNull( $result_json );
 		$decoded = json_decode( $result_json, true );
 		$this->assertIsArray( $decoded );
@@ -105,25 +94,18 @@ final class PayloadCapTest extends WP_UnitTestCase {
 		}
 
 		$large_result = array( 'data' => str_repeat( 'y', 200_000 ) );
-
-		$wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			'test/no-cap',
+		++self::$counter;
+		$name = 'abilityguard-tests/payload-nocap-' . self::$counter;
+		$row  = $this->execute_and_get_log_row(
+			$name,
 			array(
 				'destructive'       => false,
 				'max_payload_bytes' => 0,
-			)
+			),
+			static fn() => $large_result
 		);
 
-		$callback = $wrapper->wrap( static fn() => $large_result );
-		$callback( null );
-
-		$repo = new LogRepository();
-		$rows = $repo->list( array( 'ability_name' => 'test/no-cap' ) );
-		$this->assertCount( 1, $rows );
-
-		$result_json = $rows[0]['result_json'];
+		$result_json = $row['result_json'];
 		$this->assertNotNull( $result_json );
 		$decoded = json_decode( $result_json, true );
 		$this->assertIsArray( $decoded );
@@ -140,25 +122,18 @@ final class PayloadCapTest extends WP_UnitTestCase {
 		}
 
 		$medium_result = array( 'data' => str_repeat( 'z', 2000 ) );
-
-		$wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			'test/tight-cap',
+		++self::$counter;
+		$name = 'abilityguard-tests/payload-tight-' . self::$counter;
+		$row  = $this->execute_and_get_log_row(
+			$name,
 			array(
 				'destructive'       => false,
 				'max_payload_bytes' => 1024,
-			)
+			),
+			static fn() => $medium_result
 		);
 
-		$callback = $wrapper->wrap( static fn() => $medium_result );
-		$callback( null );
-
-		$repo = new LogRepository();
-		$rows = $repo->list( array( 'ability_name' => 'test/tight-cap' ) );
-		$this->assertCount( 1, $rows );
-
-		$result_json = $rows[0]['result_json'];
+		$result_json = $row['result_json'];
 		$decoded     = json_decode( (string) $result_json, true );
 		$this->assertIsArray( $decoded );
 		$this->assertTrue( $decoded[ PayloadCap::MARKER_KEY ], 'Per-ability 1 KB cap should trigger truncation' );

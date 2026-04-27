@@ -4,14 +4,11 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Tests\Integration;
 
-use AbilityGuard\Audit\AuditLogger;
 use AbilityGuard\Audit\LogMeta;
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Installer;
-use AbilityGuard\Registry\AbilityWrapper;
 use AbilityGuard\Registry\InvocationStack;
 use AbilityGuard\Rollback\RollbackService;
-use AbilityGuard\Snapshot\SnapshotService;
 use AbilityGuard\Snapshot\SnapshotStore;
 use WP_UnitTestCase;
 
@@ -23,6 +20,8 @@ use WP_UnitTestCase;
  */
 final class InvocationCorrelationTest extends WP_UnitTestCase {
 
+	use AbilityRegistrationTrait;
+
 	/**
 	 * Monotonic counter so each test gets a unique ability name.
 	 */
@@ -30,6 +29,9 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 
 	protected function setUp(): void {
 		parent::setUp();
+		if ( ! function_exists( 'wp_register_ability' ) ) {
+			$this->markTestSkipped( 'abilities-api plugin not loaded' );
+		}
 		Installer::install();
 		InvocationStack::reset();
 	}
@@ -40,32 +42,19 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 	}
 
 	/**
-	 * Build a fresh wrapper, invoke it, return [log_id, invocation_id].
+	 * Register a single ability through the abilities-api flow, execute, and
+	 * return the resulting log row + ids.
 	 *
-	 * @param array<string, mixed> $safety Safety config.
-	 * @param callable             $cb     Inner callback.
-	 *
-	 * @return array{log_id: int, invocation_id: string, row: array<string, mixed>}
+	 * @return array{log_id:int,invocation_id:string,row:array<string,mixed>}
 	 */
 	private function invoke( array $safety, callable $cb ): array {
 		++self::$counter;
-		$ability = 'corr-test/ability-' . self::$counter;
-		$wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			$ability,
-			$safety
-		);
-		$wrapped = $wrapper->wrap( $cb );
-		$wrapped( null );
-
-		$repo = new LogRepository();
-		$rows = $repo->list( array( 'ability_name' => $ability ) );
-		$this->assertNotEmpty( $rows, "Log row missing for {$ability}" );
+		$name = 'abilityguard-tests/corr-' . self::$counter;
+		$row  = $this->execute_and_get_log_row( $name, $safety, $cb );
 		return array(
-			'log_id'        => (int) $rows[0]['id'],
-			'invocation_id' => (string) $rows[0]['invocation_id'],
-			'row'           => $rows[0],
+			'log_id'        => (int) $row['id'],
+			'invocation_id' => (string) $row['invocation_id'],
+			'row'           => $row,
 		);
 	}
 
@@ -92,35 +81,44 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 
 	public function test_parent_invocation_id_links_nested_calls(): void {
 		++self::$counter;
-		$inner_ability = 'corr-test/inner-' . self::$counter;
-		$inner_wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			$inner_ability,
-			array( 'destructive' => false )
+		$inner_name = 'abilityguard-tests/corr-inner-' . self::$counter;
+		$this->ensure_test_category();
+		$this->register_via_init(
+			$inner_name,
+			static fn() => array(
+				'label'               => 'inner',
+				'description'         => 'inner ability',
+				'category'            => 'abilityguard-tests',
+				'permission_callback' => '__return_true',
+				'execute_callback'    => static fn() => 'inner-ok',
+				'input_schema'        => array( 'type' => array( 'object', 'null' ) ),
+				'safety'              => array( 'destructive' => false ),
+			)
 		);
-		$inner         = $inner_wrapper->wrap( static fn() => 'inner-ok' );
 
 		++self::$counter;
-		$outer_ability = 'corr-test/outer-' . self::$counter;
-		$outer_wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			$outer_ability,
-			array( 'destructive' => false )
-		);
-		$outer         = $outer_wrapper->wrap(
-			static function () use ( $inner ) {
-				$inner( null );
-				return 'outer-ok';
-			}
+		$outer_name = 'abilityguard-tests/corr-outer-' . self::$counter;
+		$this->register_via_init(
+			$outer_name,
+			static fn() => array(
+				'label'               => 'outer',
+				'description'         => 'outer ability',
+				'category'            => 'abilityguard-tests',
+				'permission_callback' => '__return_true',
+				'execute_callback'    => static function () use ( $inner_name ) {
+					wp_get_ability( $inner_name )->execute( null );
+					return 'outer-ok';
+				},
+				'input_schema'        => array( 'type' => array( 'object', 'null' ) ),
+				'safety'              => array( 'destructive' => false ),
+			)
 		);
 
-		$outer( null );
+		wp_get_ability( $outer_name )->execute( null );
 
 		$repo       = new LogRepository();
-		$outer_rows = $repo->list( array( 'ability_name' => $outer_ability ) );
-		$inner_rows = $repo->list( array( 'ability_name' => $inner_ability ) );
+		$outer_rows = $repo->list( array( 'ability_name' => $outer_name ) );
+		$inner_rows = $repo->list( array( 'ability_name' => $inner_name ) );
 
 		$this->assertNotEmpty( $outer_rows );
 		$this->assertNotEmpty( $inner_rows );
@@ -137,44 +135,53 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 	}
 
 	public function test_nested_call_inherits_parent_lock_instead_of_blocking(): void {
-		// Same surface set on outer + inner → lock keys collide. With
-		// the inner call must detect parent_invocation_id and inherit the
-		// already-held lock instead of failing with abilityguard_lock_timeout.
+		// Same surface set on outer + inner, lock keys collide. The inner
+		// call must detect parent_invocation_id and inherit the already-held
+		// lock instead of failing with abilityguard_lock_timeout.
 		$option_name = 'ag_lock_reentry_test_' . self::$counter;
 		update_option( $option_name, 'before' );
 
 		++self::$counter;
-		$inner_ability = 'corr-test/lock-inner-' . self::$counter;
-		$inner_wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			$inner_ability,
-			array(
-				'destructive' => true,
-				'snapshot'    => array( 'options' => array( $option_name ) ),
+		$inner_name = 'abilityguard-tests/corr-lock-inner-' . self::$counter;
+		$this->ensure_test_category();
+		$this->register_via_init(
+			$inner_name,
+			static fn() => array(
+				'label'               => 'inner-lock',
+				'description'         => 'inner lock ability',
+				'category'            => 'abilityguard-tests',
+				'permission_callback' => '__return_true',
+				'execute_callback'    => static fn() => 'inner-ok',
+				'input_schema'        => array( 'type' => array( 'object', 'null' ) ),
+				'safety'              => array(
+					'destructive' => true,
+					'snapshot'    => array( 'options' => array( $option_name ) ),
+				),
 			)
 		);
-		$inner         = $inner_wrapper->wrap( static fn() => 'inner-ok' );
 
 		++self::$counter;
-		$outer_ability = 'corr-test/lock-outer-' . self::$counter;
-		$outer_wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			$outer_ability,
-			array(
-				'destructive' => true,
-				'snapshot'    => array( 'options' => array( $option_name ) ),
+		$outer_name = 'abilityguard-tests/corr-lock-outer-' . self::$counter;
+		$this->register_via_init(
+			$outer_name,
+			static fn() => array(
+				'label'               => 'outer-lock',
+				'description'         => 'outer lock ability',
+				'category'            => 'abilityguard-tests',
+				'permission_callback' => '__return_true',
+				'execute_callback'    => static function () use ( $inner_name ) {
+					$result = wp_get_ability( $inner_name )->execute( null );
+					return is_wp_error( $result ) ? $result : 'outer-ok';
+				},
+				'input_schema'        => array( 'type' => array( 'object', 'null' ) ),
+				'safety'              => array(
+					'destructive' => true,
+					'snapshot'    => array( 'options' => array( $option_name ) ),
+				),
 			)
 		);
-		$outer         = $outer_wrapper->wrap(
-			static function () use ( $inner ) {
-				$result = $inner( null );
-				return is_wp_error( $result ) ? $result : 'outer-ok';
-			}
-		);
 
-		$result = $outer( null );
+		$result = wp_get_ability( $outer_name )->execute( null );
 
 		$this->assertSame( 'outer-ok', $result, 'outer must return its own value, meaning inner did not WP_Error on the lock' );
 
@@ -183,21 +190,25 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 
 	public function test_invocation_stack_pops_after_throw(): void {
 		++self::$counter;
-		$ability = 'corr-test/throw-' . self::$counter;
-		$wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			$ability,
-			array( 'destructive' => false )
-		);
-		$wrapped = $wrapper->wrap(
-			static function (): never {
-				throw new \RuntimeException( 'boom' );
-			}
+		$name = 'abilityguard-tests/corr-throw-' . self::$counter;
+		$this->ensure_test_category();
+		$this->register_via_init(
+			$name,
+			static fn() => array(
+				'label'               => 'throws',
+				'description'         => 'throws ability',
+				'category'            => 'abilityguard-tests',
+				'permission_callback' => '__return_true',
+				'execute_callback'    => static function (): never {
+					throw new \RuntimeException( 'boom' );
+				},
+				'input_schema'        => array( 'type' => array( 'object', 'null' ) ),
+				'safety'              => array( 'destructive' => false ),
+			)
 		);
 
 		try {
-			$wrapped( null );
+			wp_get_ability( $name )->execute( null );
 			$this->fail( 'expected throw' );
 		} catch ( \RuntimeException $e ) {
 			$this->assertSame( 'boom', $e->getMessage() );
@@ -208,9 +219,9 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 
 	public function test_mcp_invoked_ability_has_no_parent_but_nested_call_does(): void {
 		// MCP-invoked top-level ability: caller_type=mcp, caller_id=server,
-		// parent_invocation_id=null. Its inner call to another wrapped
-		// ability should inherit parent_invocation_id from the MCP-invoked
-		// ability's invocation_id.
+		// parent_invocation_id=null. Its inner call to another ability should
+		// inherit parent_invocation_id from the MCP-invoked ability's
+		// invocation_id and continue to record caller_type=mcp.
 		\AbilityGuard\Registry\McpContext::reset_for_tests();
 		\AbilityGuard\Registry\McpContext::register();
 
@@ -222,35 +233,44 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 		apply_filters( 'mcp_adapter_pre_tool_call', array(), 'whatever', null, $fake_server );
 
 		++self::$counter;
-		$inner_ability = 'corr-test/mcp-inner-' . self::$counter;
-		$inner_wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			$inner_ability,
-			array( 'destructive' => false )
+		$inner_name = 'abilityguard-tests/corr-mcp-inner-' . self::$counter;
+		$this->ensure_test_category();
+		$this->register_via_init(
+			$inner_name,
+			static fn() => array(
+				'label'               => 'mcp-inner',
+				'description'         => 'mcp inner',
+				'category'            => 'abilityguard-tests',
+				'permission_callback' => '__return_true',
+				'execute_callback'    => static fn() => 'inner-ok',
+				'input_schema'        => array( 'type' => array( 'object', 'null' ) ),
+				'safety'              => array( 'destructive' => false ),
+			)
 		);
-		$inner         = $inner_wrapper->wrap( static fn() => 'inner-ok' );
 
 		++self::$counter;
-		$outer_ability = 'corr-test/mcp-outer-' . self::$counter;
-		$outer_wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			$outer_ability,
-			array( 'destructive' => false )
-		);
-		$outer         = $outer_wrapper->wrap(
-			static function () use ( $inner ) {
-				$inner( null );
-				return 'outer-ok';
-			}
+		$outer_name = 'abilityguard-tests/corr-mcp-outer-' . self::$counter;
+		$this->register_via_init(
+			$outer_name,
+			static fn() => array(
+				'label'               => 'mcp-outer',
+				'description'         => 'mcp outer',
+				'category'            => 'abilityguard-tests',
+				'permission_callback' => '__return_true',
+				'execute_callback'    => static function () use ( $inner_name ) {
+					wp_get_ability( $inner_name )->execute( null );
+					return 'outer-ok';
+				},
+				'input_schema'        => array( 'type' => array( 'object', 'null' ) ),
+				'safety'              => array( 'destructive' => false ),
+			)
 		);
 
-		$outer( null );
+		wp_get_ability( $outer_name )->execute( null );
 
 		$repo       = new LogRepository();
-		$outer_rows = $repo->list( array( 'ability_name' => $outer_ability ) );
-		$inner_rows = $repo->list( array( 'ability_name' => $inner_ability ) );
+		$outer_rows = $repo->list( array( 'ability_name' => $outer_name ) );
+		$inner_rows = $repo->list( array( 'ability_name' => $inner_name ) );
 
 		$this->assertSame( 'mcp', $outer_rows[0]['caller_type'], 'outer call should record MCP caller_type' );
 		$this->assertSame( 'trial-mcp-server', $outer_rows[0]['caller_id'], 'outer call should record server id' );
@@ -274,28 +294,23 @@ final class InvocationCorrelationTest extends WP_UnitTestCase {
 		file_put_contents( $path, 'original' );
 
 		++self::$counter;
-		$ability = 'corr-test/files-' . self::$counter;
-		$wrapper = new AbilityWrapper(
-			new SnapshotService( new SnapshotStore() ),
-			new AuditLogger(),
-			$ability,
+		$name = 'abilityguard-tests/corr-files-' . self::$counter;
+		$this->execute_and_get_log_row(
+			$name,
 			array(
 				'destructive' => true,
-				'snapshot'    => array(
-					'files' => array( $path ),
-				),
-			)
+				'snapshot'    => array( 'files' => array( $path ) ),
+			),
+			static fn() => 'ok'
 		);
-		$wrapped = $wrapper->wrap( static fn() => 'ok' );
-		$wrapped( null );
 
-		// Mutate file AFTER the invocation - this is third-party drift the
-		// rollback should surface.
+		// Mutate file AFTER the invocation - third-party drift the rollback
+		// should surface.
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
 		file_put_contents( $path, 'drifted-content' );
 
 		$repo = new LogRepository();
-		$rows = $repo->list( array( 'ability_name' => $ability ) );
+		$rows = $repo->list( array( 'ability_name' => $name ) );
 		$this->assertNotEmpty( $rows );
 		$log_id = (int) $rows[0]['id'];
 

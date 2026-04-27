@@ -6,8 +6,6 @@ namespace AbilityGuard\Tests\Integration;
 
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Installer;
-use WP_Abilities_Registry;
-use WP_Ability_Categories_Registry;
 use WP_Error;
 use WP_UnitTestCase;
 
@@ -18,6 +16,8 @@ use WP_UnitTestCase;
  */
 final class HookSplitTest extends WP_UnitTestCase {
 
+	use AbilityRegistrationTrait;
+
 	protected function setUp(): void {
 		parent::setUp();
 		if ( ! function_exists( 'wp_register_ability' ) ) {
@@ -25,33 +25,6 @@ final class HookSplitTest extends WP_UnitTestCase {
 		}
 		Installer::install();
 		$this->ensure_test_category();
-	}
-
-	private function ensure_test_category(): void {
-		if ( wp_has_ability_category( 'abilityguard-tests' ) ) {
-			return;
-		}
-		$cb = static function ( $registry ): void {
-			$registry->register(
-				'abilityguard-tests',
-				array(
-					'label'       => 'AbilityGuard tests',
-					'description' => 'Category for AbilityGuard integration tests.',
-				)
-			);
-		};
-		add_action( 'wp_abilities_api_categories_init', $cb );
-		WP_Ability_Categories_Registry::get_instance();
-		do_action( 'wp_abilities_api_categories_init', WP_Ability_Categories_Registry::get_instance() );
-		remove_action( 'wp_abilities_api_categories_init', $cb );
-	}
-
-	private function register_via_init( string $name, callable $build ): \WP_Ability {
-		$registry = WP_Abilities_Registry::get_instance();
-		$args     = $build( $registry );
-		$result   = $registry->register( $name, $args );
-		$this->assertNotNull( $result );
-		return $result;
 	}
 
 	public function test_before_hook_listener_is_audit_source_of_truth(): void {
