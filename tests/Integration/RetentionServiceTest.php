@@ -35,8 +35,9 @@ final class RetentionServiceTest extends WP_UnitTestCase {
 	 * @param string $invocation_id UUID.
 	 * @param bool   $destructive   Whether the row is destructive.
 	 * @param int    $days_ago      How many days in the past to backdate.
+	 * @param string $status        Log status (ok|error|rolled_back|pending|rejected).
 	 */
-	private function insert_log( string $invocation_id, bool $destructive, int $days_ago ): void {
+	private function insert_log( string $invocation_id, bool $destructive, int $days_ago, string $status = 'ok' ): void {
 		global $wpdb;
 
 		$this->logger->log(
@@ -47,7 +48,7 @@ final class RetentionServiceTest extends WP_UnitTestCase {
 				'user_id'       => 0,
 				'args_json'     => null,
 				'result_json'   => null,
-				'status'        => 'ok',
+				'status'        => $status,
 				'destructive'   => $destructive,
 				'duration_ms'   => 1,
 				'pre_hash'      => str_repeat( 'a', 64 ),
@@ -189,6 +190,38 @@ final class RetentionServiceTest extends WP_UnitTestCase {
 
 		$this->assertSame( 1, $result['snapshots_deleted'] );
 		$this->assertSame( 0, $this->snapshot_exists( 'orphan-snap' ) );
+	}
+
+	/**
+	 * Per-status retention: pending older than 7d goes; ok at 30d (between 7
+	 * and 90) stays; error at 100d (between 90 and 180) stays.
+	 */
+	public function test_per_status_thresholds(): void {
+		$this->insert_log( 'pending-old', false, 14, 'pending' );
+		$this->insert_log( 'pending-young', false, 3, 'pending' );
+		$this->insert_log( 'ok-mid', false, 30, 'ok' );
+		$this->insert_log( 'ok-stale', false, 120, 'ok' );
+		$this->insert_log( 'error-mid', false, 100, 'error' );
+		$this->insert_log( 'error-stale', false, 200, 'error' );
+
+		add_filter(
+			'abilityguard_retention_days_by_status',
+			fn() => array(
+				'pending' => 7,
+				'ok'      => 90,
+				'error'   => 180,
+			)
+		);
+		$result = $this->service->prune();
+		remove_all_filters( 'abilityguard_retention_days_by_status' );
+
+		$this->assertSame( 3, $result['logs_deleted'] );
+		$this->assertSame( 0, $this->log_exists( 'pending-old' ) );
+		$this->assertSame( 1, $this->log_exists( 'pending-young' ) );
+		$this->assertSame( 1, $this->log_exists( 'ok-mid' ) );
+		$this->assertSame( 0, $this->log_exists( 'ok-stale' ) );
+		$this->assertSame( 1, $this->log_exists( 'error-mid' ) );
+		$this->assertSame( 0, $this->log_exists( 'error-stale' ) );
 	}
 
 	/**

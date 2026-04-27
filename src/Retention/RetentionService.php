@@ -36,6 +36,52 @@ final class RetentionService {
 	}
 
 	/**
+	 * Default per-status retention thresholds, in days.
+	 *
+	 * Pending rows are noise after a week; ok rows are routine audit
+	 * trail; error rows are evidence and stick around for six months.
+	 * Rejected approvals are short-lived (compliance only cares whether
+	 * a denial happened recently). Rolled-back rows match ok.
+	 *
+	 * Status names match {@see \AbilityGuard\Audit\LogRepository::ALLOWED_STATUS}.
+	 */
+	private const PER_STATUS_DEFAULTS = array(
+		'pending'     => 7,
+		'ok'          => 90,
+		'error'       => 180,
+		'rejected'    => 30,
+		'rolled_back' => 90,
+	);
+
+	/**
+	 * Per-status retention thresholds in days.
+	 *
+	 * Returns an empty array when no override has been registered, which
+	 * tells {@see prune()} to fall back to the legacy normal/destructive
+	 * split. A non-empty array switches the pruner into per-status mode
+	 * and unspecified statuses are filled in from {@see PER_STATUS_DEFAULTS}.
+	 *
+	 * 0 for any status means "never prune that status".
+	 *
+	 * @return array<string, int>
+	 */
+	public function retention_days_by_status(): array {
+		$raw = apply_filters( 'abilityguard_retention_days_by_status', array() );
+		if ( ! is_array( $raw ) || array() === $raw ) {
+			return array();
+		}
+
+		$out = self::PER_STATUS_DEFAULTS;
+		foreach ( $raw as $status => $days ) {
+			if ( ! is_string( $status ) || ! array_key_exists( $status, self::PER_STATUS_DEFAULTS ) ) {
+				continue;
+			}
+			$out[ $status ] = max( 0, (int) $days );
+		}
+		return $out;
+	}
+
+	/**
 	 * Run all pruning operations.
 	 *
 	 * @return array{ logs_deleted: int, snapshots_deleted: int, blobs_deleted: int }
@@ -50,26 +96,46 @@ final class RetentionService {
 
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, PluginCheck.Security.DirectDB.UnescapedDBParameter
 		// Table names come from Installer::table() and are not user input.
-		$days_normal = $this->retention_days_normal();
-		if ( $days_normal > 0 ) {
-			$wpdb->query(
-				$wpdb->prepare(
-					"DELETE FROM {$log} WHERE destructive = 0 AND created_at < NOW() - INTERVAL %d DAY",
-					$days_normal
-				)
-			);
-			$logs_deleted += (int) $wpdb->rows_affected;
-		}
+		$by_status = $this->retention_days_by_status();
+		if ( array() !== $by_status ) {
+			// Per-status mode: one DELETE per status, each with its own age cutoff.
+			// Different statuses carry different audit value (pending = noise after a
+			// week, error = evidence for six months) so a single threshold is wrong.
+			foreach ( $by_status as $status => $days ) {
+				if ( $days <= 0 ) {
+					continue;
+				}
+				$wpdb->query(
+					$wpdb->prepare(
+						"DELETE FROM {$log} WHERE status = %s AND created_at < NOW() - INTERVAL %d DAY",
+						$status,
+						$days
+					)
+				);
+				$logs_deleted += (int) $wpdb->rows_affected;
+			}
+		} else {
+			$days_normal = $this->retention_days_normal();
+			if ( $days_normal > 0 ) {
+				$wpdb->query(
+					$wpdb->prepare(
+						"DELETE FROM {$log} WHERE destructive = 0 AND created_at < NOW() - INTERVAL %d DAY",
+						$days_normal
+					)
+				);
+				$logs_deleted += (int) $wpdb->rows_affected;
+			}
 
-		$days_destructive = $this->retention_days_destructive();
-		if ( $days_destructive > 0 ) {
-			$wpdb->query(
-				$wpdb->prepare(
-					"DELETE FROM {$log} WHERE destructive = 1 AND created_at < NOW() - INTERVAL %d DAY",
-					$days_destructive
-				)
-			);
-			$logs_deleted += (int) $wpdb->rows_affected;
+			$days_destructive = $this->retention_days_destructive();
+			if ( $days_destructive > 0 ) {
+				$wpdb->query(
+					$wpdb->prepare(
+						"DELETE FROM {$log} WHERE destructive = 1 AND created_at < NOW() - INTERVAL %d DAY",
+						$days_destructive
+					)
+				);
+				$logs_deleted += (int) $wpdb->rows_affected;
+			}
 		}
 
 		$wpdb->query(
