@@ -133,6 +133,20 @@ final class ApprovalService {
 				? (int) $stage['user_id']
 				: null;
 
+			// `approval_roles` accepts a list of WP role slugs; any-of match
+			// gates a stage to that pool. NULL/empty leaves cap check alone
+			// in charge - keeps single-stage v1.0 callers untouched.
+			$approval_roles_json = null;
+			if ( is_array( $stage ) && isset( $stage['approval_roles'] ) && is_array( $stage['approval_roles'] ) ) {
+				$roles = array_values( array_filter( array_map( 'strval', $stage['approval_roles'] ), static fn( $r ) => '' !== $r ) );
+				if ( array() !== $roles ) {
+					$encoded = wp_json_encode( $roles );
+					if ( is_string( $encoded ) ) {
+						$approval_roles_json = $encoded;
+					}
+				}
+			}
+
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 			$wpdb->insert(
 				$stage_table,
@@ -143,11 +157,13 @@ final class ApprovalService {
 					'required_user_id' => $required_user_id,
 					'required_count'   => $required_count,
 					'decision_count'   => 0,
+					'approval_roles'   => $approval_roles_json,
 					'status'           => 0 === $idx ? 'waiting' : 'pending',
 					'decided_by'       => 0,
+					'decided_by_role'  => null,
 					'decided_at'       => null,
 				),
-				array( '%d', '%d', '%s', null === $required_user_id ? '%s' : '%d', '%d', '%d', '%s', '%d', '%s' )
+				array( '%d', '%d', '%s', null === $required_user_id ? '%s' : '%d', '%d', '%d', '%s', '%s', '%d', '%s', '%s' )
 			);
 		}
 
@@ -236,12 +252,26 @@ final class ApprovalService {
 			);
 		}
 
+		$stage_roles  = $this->decode_roles( $active_stage['approval_roles'] ?? null );
+		$acting_role  = $this->resolve_acting_role( $user_id, $stage_roles );
+		if ( array() !== $stage_roles && null === $acting_role ) {
+			return new WP_Error(
+				'abilityguard_approve_wrong_role',
+				sprintf( 'Stage requires one of roles: %s.', implode( ', ', $stage_roles ) )
+			);
+		}
+
+		$sod = $this->check_separation_of_duties( $approval_id, (int) $active_stage['stage_index'], $user_id, $acting_role );
+		if ( $sod instanceof WP_Error ) {
+			return $sod;
+		}
+
 		// Parallel quorum: instead of one atomic flip to 'approved', increment
 		// decision_count atomically. The stage flips to 'approved' only when
 		// the count reaches required_count. Single-stage and 1-of-1 stages
 		// hit the threshold on the first approve and behave identically to
 		// the v1.1 path.
-		$reached = $this->record_stage_approval( $approval_id, (int) $active_stage['stage_index'], $user_id, $required_count );
+		$reached = $this->record_stage_approval( $approval_id, (int) $active_stage['stage_index'], $user_id, $required_count, $acting_role );
 		if ( null === $reached ) {
 			return new WP_Error(
 				'abilityguard_stage_already_decided',
@@ -352,7 +382,7 @@ final class ApprovalService {
 	 *                   the stage is no longer 'waiting' (lost the race or
 	 *                   already finalised).
 	 */
-	private function record_stage_approval( int $approval_id, int $stage_index, int $user_id, int $required_count ): ?bool {
+	private function record_stage_approval( int $approval_id, int $stage_index, int $user_id, int $required_count, ?string $acting_role = null ): ?bool {
 		global $wpdb;
 		$table = Installer::table( 'approval_stages' );
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- table name from Installer::table().
@@ -362,10 +392,11 @@ final class ApprovalService {
 		$rows = $wpdb->query(
 			$wpdb->prepare(
 				"UPDATE {$table}
-				   SET status     = CASE WHEN decision_count + 1 >= %d THEN %s ELSE status END,
-				       decided_by = CASE WHEN decision_count + 1 >= %d THEN %d ELSE decided_by END,
-				       decided_at = CASE WHEN decision_count + 1 >= %d THEN %s ELSE decided_at END,
-				       decision_count = decision_count + 1
+				   SET status          = CASE WHEN decision_count + 1 >= %d THEN %s ELSE status END,
+				       decided_by      = CASE WHEN decision_count + 1 >= %d THEN %d ELSE decided_by END,
+				       decided_by_role = CASE WHEN decision_count + 1 >= %d THEN %s ELSE decided_by_role END,
+				       decided_at      = CASE WHEN decision_count + 1 >= %d THEN %s ELSE decided_at END,
+				       decision_count  = decision_count + 1
 				 WHERE approval_id = %d
 				   AND stage_index = %d
 				   AND status = %s",
@@ -373,6 +404,8 @@ final class ApprovalService {
 				'approved',
 				$required_count,
 				$user_id,
+				$required_count,
+				null === $acting_role ? '' : $acting_role,
 				$required_count,
 				current_time( 'mysql', true ),
 				$approval_id,
@@ -408,23 +441,25 @@ final class ApprovalService {
 	 * @param int    $user_id     Deciding user.
 	 * @param string $status      New status.
 	 */
-	private function claim_stage( int $approval_id, int $stage_index, int $user_id, string $status ): bool {
+	private function claim_stage( int $approval_id, int $stage_index, int $user_id, string $status, ?string $acting_role = null ): bool {
 		global $wpdb;
 		$table = Installer::table( 'approval_stages' );
+		$data  = array(
+			'status'          => $status,
+			'decided_by'      => $user_id,
+			'decided_by_role' => null === $acting_role ? '' : $acting_role,
+			'decided_at'      => current_time( 'mysql', true ),
+		);
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		$rows = $wpdb->update(
 			$table,
-			array(
-				'status'     => $status,
-				'decided_by' => $user_id,
-				'decided_at' => current_time( 'mysql', true ),
-			),
+			$data,
 			array(
 				'approval_id' => $approval_id,
 				'stage_index' => $stage_index,
 				'status'      => 'waiting',
 			),
-			array( '%s', '%d', '%s' ),
+			array( '%s', '%d', '%s', '%s' ),
 			array( '%d', '%d', '%s' )
 		);
 		return is_int( $rows ) && $rows > 0;
@@ -517,7 +552,21 @@ final class ApprovalService {
 			);
 		}
 
-		$claimed = $this->claim_stage( $approval_id, (int) $active_stage['stage_index'], $user_id, 'rejected' );
+		$stage_roles = $this->decode_roles( $active_stage['approval_roles'] ?? null );
+		$acting_role = $this->resolve_acting_role( $user_id, $stage_roles );
+		if ( array() !== $stage_roles && null === $acting_role ) {
+			return new WP_Error(
+				'abilityguard_approve_wrong_role',
+				sprintf( 'Stage requires one of roles: %s.', implode( ', ', $stage_roles ) )
+			);
+		}
+
+		$sod = $this->check_separation_of_duties( $approval_id, (int) $active_stage['stage_index'], $user_id, $acting_role );
+		if ( $sod instanceof WP_Error ) {
+			return $sod;
+		}
+
+		$claimed = $this->claim_stage( $approval_id, (int) $active_stage['stage_index'], $user_id, 'rejected', $acting_role );
 		if ( ! $claimed ) {
 			return new WP_Error(
 				'abilityguard_stage_already_decided',
@@ -559,5 +608,131 @@ final class ApprovalService {
 		$this->logs->update_status( (int) $row['log_id'], 'rejected' );
 
 		return true;
+	}
+
+	/**
+	 * Decode the JSON-encoded `approval_roles` column. Tolerates legacy
+	 * NULLs (no role gate) and malformed JSON (treated as no gate).
+	 *
+	 * @param mixed $raw Raw column value.
+	 *
+	 * @return array<int, string>
+	 */
+	private function decode_roles( $raw ): array {
+		if ( null === $raw || '' === $raw ) {
+			return array();
+		}
+		if ( ! is_string( $raw ) ) {
+			return array();
+		}
+		$decoded = json_decode( $raw, true );
+		if ( ! is_array( $decoded ) ) {
+			return array();
+		}
+		return array_values( array_filter( array_map( 'strval', $decoded ), static fn( $r ) => '' !== $r ) );
+	}
+
+	/**
+	 * Pick the role $user_id is acting under for a stage. Returns the first
+	 * role the user actually holds from the stage's `approval_roles` list.
+	 * That deterministic ordering lets SOD compare prior-stage `decided_by_role`
+	 * against the candidate's role without ambiguity when a user holds many.
+	 * Returns null when the user holds none of the listed roles.
+	 *
+	 * @param int                $user_id     Acting user.
+	 * @param array<int, string> $stage_roles Stage's approval_roles.
+	 *
+	 * @return string|null
+	 */
+	private function resolve_acting_role( int $user_id, array $stage_roles ): ?string {
+		if ( array() === $stage_roles ) {
+			return null;
+		}
+		$user = function_exists( 'get_userdata' ) ? get_userdata( $user_id ) : false;
+		if ( ! $user || empty( $user->roles ) || ! is_array( $user->roles ) ) {
+			return null;
+		}
+		$user_roles = array_map( 'strval', $user->roles );
+		foreach ( $stage_roles as $role ) {
+			if ( in_array( $role, $user_roles, true ) ) {
+				return $role;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Separation of duties check against the most-recently-decided prior
+	 * stage. Two rules:
+	 *   1. Same user is always rejected (a user must never decide two stages
+	 *      in the same chain).
+	 *   2. Same role is rejected only when the prior stage had more than one
+	 *      role declared in `approval_roles` - otherwise a single-role chain
+	 *      (e.g. ['admin'] at every stage) would be impossible to satisfy.
+	 *
+	 * Pre-v1.2 rows have NULL `decided_by_role`; we skip the role rule for
+	 * those because there's no recorded role to compare against.
+	 *
+	 * Why "most recent prior" instead of all prior: the chain is sequential
+	 * and each stage already enforced its own SOD against its predecessor,
+	 * so transitivity covers the rest.
+	 *
+	 * @param int         $approval_id    Approval id.
+	 * @param int         $stage_index    Index of the stage being decided.
+	 * @param int         $user_id        Deciding user.
+	 * @param string|null $acting_role    Role the user is acting under, or null.
+	 *
+	 * @return WP_Error|null WP_Error to reject, null to allow.
+	 */
+	private function check_separation_of_duties( int $approval_id, int $stage_index, int $user_id, ?string $acting_role ): ?WP_Error {
+		if ( $stage_index <= 0 ) {
+			return null;
+		}
+		global $wpdb;
+		$table = Installer::table( 'approval_stages' );
+		// phpcs:disable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- table name from Installer::table().
+		$prev = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT decided_by, decided_by_role, approval_roles
+				   FROM {$table}
+				  WHERE approval_id = %d
+				    AND stage_index < %d
+				    AND status = %s
+				  ORDER BY stage_index DESC
+				  LIMIT 1",
+				$approval_id,
+				$stage_index,
+				'approved'
+			),
+			ARRAY_A
+		);
+		// phpcs:enable WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+
+		if ( ! is_array( $prev ) ) {
+			return null;
+		}
+
+		$prev_user = (int) ( $prev['decided_by'] ?? 0 );
+		if ( $prev_user > 0 && $prev_user === $user_id ) {
+			return new WP_Error(
+				'abilityguard_sod_same_user',
+				sprintf( 'User #%d already decided a previous stage in this chain.', $user_id )
+			);
+		}
+
+		$prev_role  = isset( $prev['decided_by_role'] ) ? (string) $prev['decided_by_role'] : '';
+		$prev_roles = $this->decode_roles( $prev['approval_roles'] ?? null );
+
+		// Only enforce role-SOD when the prior stage was multi-role; a
+		// single-role chain ['admin'] -> ['admin'] is a legitimate config
+		// (different admins approving sequentially).
+		if ( '' !== $prev_role && null !== $acting_role && $prev_role === $acting_role && count( $prev_roles ) > 1 ) {
+			return new WP_Error(
+				'abilityguard_sod_same_role',
+				sprintf( 'Role "%s" already decided a previous stage in this multi-role chain.', $acting_role )
+			);
+		}
+
+		return null;
 	}
 }

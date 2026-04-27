@@ -24,7 +24,7 @@ defined( 'ABSPATH' ) || exit;
 final class Installer {
 
 	public const DB_VERSION_OPTION = 'abilityguard_db_version';
-	public const DB_VERSION        = '5';
+	public const DB_VERSION        = '6';
 
 	/**
 	 * Activation hook.
@@ -257,6 +257,13 @@ final class Installer {
 		// When both required_cap and required_user_id are set, BOTH must match.
 		// `decision_count` tracks how many approves the stage has accumulated;
 		// stage advances only when decision_count >= required_count.
+		// `approval_roles` (JSON-encoded list of role slugs) gates a stage to
+		// users in any of those roles - role-based routing on top of the
+		// existing capability check. NULL means "no role gate, cap check
+		// alone decides". `decided_by_role` records which role the deciding
+		// user was acting as, so the next stage can enforce separation of
+		// duties (a user with multiple matching roles is recorded as the
+		// first role from approval_roles they hold).
 		$sql[] = "CREATE TABLE {$approval_stages} (
 			id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
 			approval_id bigint(20) unsigned NOT NULL,
@@ -265,8 +272,10 @@ final class Installer {
 			required_user_id bigint(20) unsigned NULL,
 			required_count smallint(5) unsigned NOT NULL DEFAULT 1,
 			decision_count smallint(5) unsigned NOT NULL DEFAULT 0,
+			approval_roles varchar(255) NULL,
 			status varchar(20) NOT NULL DEFAULT 'pending',
 			decided_by bigint(20) unsigned NOT NULL DEFAULT 0,
+			decided_by_role varchar(64) NULL,
 			decided_at datetime NULL,
 			PRIMARY KEY  (id),
 			UNIQUE KEY approval_stage (approval_id, stage_index),
