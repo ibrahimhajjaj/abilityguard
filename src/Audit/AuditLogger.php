@@ -62,4 +62,53 @@ final class AuditLogger implements AuditLoggerInterface {
 		}
 		return (int) $wpdb->insert_id;
 	}
+
+	/**
+	 * Patch a previously-inserted row with terminal fields.
+	 *
+	 * @param int                  $log_id Row id.
+	 * @param array<string, mixed> $patch  Subset of entry keys.
+	 */
+	public function complete( int $log_id, array $patch ): bool {
+		if ( $log_id <= 0 ) {
+			return false;
+		}
+		global $wpdb;
+		$table = Installer::table( 'log' );
+
+		$set     = array();
+		$formats = array();
+		if ( array_key_exists( 'result_json', $patch ) ) {
+			$set['result_json'] = $patch['result_json'];
+			$formats[]          = '%s';
+		}
+		if ( array_key_exists( 'status', $patch ) ) {
+			$set['status'] = (string) $patch['status'];
+			$formats[]     = '%s';
+		}
+		if ( array_key_exists( 'duration_ms', $patch ) ) {
+			$set['duration_ms'] = (int) $patch['duration_ms'];
+			$formats[]          = '%d';
+		}
+		if ( array_key_exists( 'post_hash', $patch ) ) {
+			$set['post_hash'] = $patch['post_hash'];
+			$formats[]        = '%s';
+		}
+		if ( array_key_exists( 'caller_type', $patch ) ) {
+			$set['caller_type'] = (string) $patch['caller_type'];
+			$formats[]          = '%s';
+		}
+		if ( array_key_exists( 'caller_id', $patch ) ) {
+			$set['caller_id'] = $patch['caller_id'];
+			$formats[]        = '%s';
+		}
+
+		if ( array() === $set ) {
+			return true;
+		}
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		$ok = $wpdb->update( $table, $set, array( 'id' => $log_id ), $formats, array( '%d' ) );
+		return false !== $ok;
+	}
 }

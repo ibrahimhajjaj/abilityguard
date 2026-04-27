@@ -84,6 +84,10 @@ final class RegistrationFilter {
 			unset( $args['safety']['collectors'] );
 		}
 
+		// Hand the resolved safety to the observer so the WP 6.9
+		// before-hook listener can find it without re-reading registry args.
+		InvocationObserver::register_safety( $name, $args['safety'] );
+
 		$wrapper                  = new AbilityWrapper( $this->snapshots, $this->audit, $name, $args['safety'] );
 		$args['execute_callback'] = $wrapper->wrap( $args['execute_callback'] );
 

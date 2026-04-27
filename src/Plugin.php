@@ -39,11 +39,13 @@ final class Plugin {
 
 		Registry\McpContext::register();
 
-		$registration = new Registry\RegistrationFilter(
-			new Snapshot\SnapshotService( new Snapshot\SnapshotStore() ),
-			new Audit\AuditLogger()
-		);
+		$snapshots = new Snapshot\SnapshotService( new Snapshot\SnapshotStore() );
+		$audit     = new Audit\AuditLogger();
+
+		$registration = new Registry\RegistrationFilter( $snapshots, $audit );
 		$registration->register();
+
+		( new Registry\InvocationObserver( $snapshots, $audit ) )->register();
 
 		( new Retention\Scheduler() )->register();
 
