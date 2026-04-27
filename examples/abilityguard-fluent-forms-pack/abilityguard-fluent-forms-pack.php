@@ -96,9 +96,11 @@ function ag_ff_pack_register_abilities( \WP_Abilities_Registry $registry ): void
 				),
 				'required'   => array( 'form_id' ),
 			),
+			'meta'                => array(
+				'annotations' => array( 'destructive' => true ),
+			),
 			'safety'              => array(
-				'destructive' => true,
-				'snapshot'    => static function ( mixed $input ): array { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+				'snapshot' => static function ( mixed $input ): array { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
 					// Capture the timestamp option so rollback can revert it.
 					// We intentionally do NOT include the new post id in post_meta
 					// because the post does not yet exist at snapshot time.

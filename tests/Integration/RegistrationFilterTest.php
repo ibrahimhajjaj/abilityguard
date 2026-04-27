@@ -101,9 +101,11 @@ final class RegistrationFilterTest extends WP_UnitTestCase {
 					'properties' => array( 'post_id' => array( 'type' => 'integer' ) ),
 					'required'   => array( 'post_id' ),
 				),
+				'meta'                => array(
+					'annotations' => array( 'destructive' => true ),
+				),
 				'safety'              => array(
-					'destructive' => true,
-					'snapshot'    => static fn( $input ) => array(
+					'snapshot' => static fn( $input ) => array(
 						'post_meta' => array( (int) $input['post_id'] => array( '_demo' ) ),
 					),
 				),
@@ -139,11 +141,36 @@ final class RegistrationFilterTest extends WP_UnitTestCase {
 				'category'            => 'abilityguard-tests',
 				'permission_callback' => '__return_true',
 				'execute_callback'    => static fn() => 'ok',
-				'safety'              => array( 'destructive' => false ),
+				'meta'                => array(
+					'annotations' => array( 'destructive' => false ),
+				),
+				'safety'              => array( 'snapshot' => array() ),
 			)
 		);
 
 		$ability = wp_get_ability( $ability_name );
 		$this->assertNotNull( $ability, 'core registry should accept args after safety is stripped' );
+	}
+
+	public function test_legacy_safety_destructive_emits_deprecation_and_migrates(): void {
+		$this->setExpectedIncorrectUsage( 'AbilityGuard' );
+
+		$ability_name = 'abilityguard-tests/legacy-destructive';
+		$this->register_via_init(
+			$ability_name,
+			static fn() => array(
+				'label'               => 'Legacy destructive',
+				'description'         => 'Uses the deprecated safety.destructive shape',
+				'category'            => 'abilityguard-tests',
+				'permission_callback' => '__return_true',
+				'execute_callback'    => static fn() => 'ok',
+				'safety'              => array( 'destructive' => true ),
+			)
+		);
+
+		$ability = wp_get_ability( $ability_name );
+		$this->assertNotNull( $ability );
+		$annotations = $ability->get_meta()['annotations'] ?? array();
+		$this->assertTrue( $annotations['destructive'] ?? null, 'legacy safety.destructive should migrate into meta.annotations' );
 	}
 }

@@ -76,9 +76,11 @@ function ag_woo_pack_register_abilities( \WP_Abilities_Registry $registry ): voi
 				),
 				'required'   => array( 'product_id', 'regular_price' ),
 			),
+			'meta'                => array(
+				'annotations' => array( 'destructive' => true ),
+			),
 			'safety'              => array(
-				'destructive' => true,
-				'snapshot'    => static function ( mixed $input ): array {
+				'snapshot' => static function ( mixed $input ): array {
 					$product_id = (int) ( $input['product_id'] ?? 0 );
 					return array(
 						'post_meta' => array(

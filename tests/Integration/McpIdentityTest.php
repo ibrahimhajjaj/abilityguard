@@ -72,7 +72,10 @@ final class McpIdentityTest extends WP_UnitTestCase {
 				'category'            => 'abilityguard-mcp-tests',
 				'permission_callback' => '__return_true',
 				'execute_callback'    => static fn() => array( 'done' => true ),
-				'safety'              => array( 'destructive' => false ),
+				'meta'                => array(
+					'annotations' => array( 'destructive' => false ),
+				),
+				'safety'              => array( 'snapshot' => array() ),
 			)
 		);
 

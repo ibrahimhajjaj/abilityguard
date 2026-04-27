@@ -85,9 +85,11 @@ final class PostStateCaptureTest extends WP_UnitTestCase {
 					'properties' => array( 'post_id' => array( 'type' => 'integer' ) ),
 					'required'   => array( 'post_id' ),
 				),
+				'meta'                => array(
+					'annotations' => array( 'destructive' => true ),
+				),
 				'safety'              => array(
-					'destructive' => true,
-					'snapshot'    => static fn( $input ) => array(
+					'snapshot' => static fn( $input ) => array(
 						'post_meta' => array( (int) $input['post_id'] => array( '_price' ) ),
 					),
 				),
@@ -145,9 +147,11 @@ final class PostStateCaptureTest extends WP_UnitTestCase {
 					'properties' => array( 'post_id' => array( 'type' => 'integer' ) ),
 					'required'   => array( 'post_id' ),
 				),
+				'meta'                => array(
+					'annotations' => array( 'destructive' => false ),
+				),
 				'safety'              => array(
-					'destructive' => false,
-					'snapshot'    => array(
+					'snapshot' => array(
 						'post_meta' => array( $post_id => array( '_price' ) ),
 					),
 				),

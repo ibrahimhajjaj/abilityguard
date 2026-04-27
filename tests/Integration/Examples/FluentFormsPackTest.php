@@ -115,9 +115,11 @@ final class FluentFormsPackTest extends WP_UnitTestCase {
 					'properties' => array( 'form_id' => array( 'type' => 'integer' ) ),
 					'required'   => array( 'form_id' ),
 				),
+				'meta'                => array(
+					'annotations' => array( 'destructive' => true ),
+				),
 				'safety'              => array(
-					'destructive' => true,
-					'snapshot'    => static function ( mixed $input ): array { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+					'snapshot' => static function ( mixed $input ): array { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
 						return array(
 							'options'   => array( 'acme_forms_last_duplicated_at' ),
 							'post_meta' => array(),
@@ -202,9 +204,11 @@ final class FluentFormsPackTest extends WP_UnitTestCase {
 					'properties' => array( 'form_id' => array( 'type' => 'integer' ) ),
 					'required'   => array( 'form_id' ),
 				),
+				'meta'                => array(
+					'annotations' => array( 'destructive' => true ),
+				),
 				'safety'              => array(
-					'destructive' => true,
-					'snapshot'    => static function ( mixed $input ): array { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
+					'snapshot' => static function ( mixed $input ): array { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found
 						return array(
 							'options'   => array( 'acme_forms_last_duplicated_at' ),
 							'post_meta' => array(),

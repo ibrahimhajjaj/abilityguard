@@ -137,12 +137,14 @@ add_action(
 						'key' => $key,
 					);
 				},
+				'meta'                => array(
+					'annotations' => array( 'destructive' => true ),
+				),
 				'safety'              => array(
-					'destructive' => true,
-					'snapshot'    => static fn( $input ) => array(
+					'snapshot'   => static fn( $input ) => array(
 						'transient' => array( (string) ( $input['key'] ?? '' ) ),
 					),
-					'collectors'  => array(
+					'collectors' => array(
 						'transient' => new TransientCollector(),
 					),
 				),

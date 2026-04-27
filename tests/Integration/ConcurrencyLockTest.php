@@ -336,8 +336,10 @@ final class ConcurrencyLockTest extends WP_UnitTestCase {
 					'properties' => array( 'post_id' => array( 'type' => 'integer' ) ),
 					'required'   => array( 'post_id' ),
 				),
+				'meta'                => array(
+					'annotations' => array( 'destructive' => true ),
+				),
 				'safety'              => array(
-					'destructive'       => true,
 					'requires_approval' => true,
 					'lock_timeout'      => 2,
 					'snapshot'          => static fn( $in ) => array(

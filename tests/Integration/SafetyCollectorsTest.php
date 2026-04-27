@@ -106,12 +106,14 @@ final class SafetyCollectorsTest extends WP_UnitTestCase {
 					$GLOBALS['__ag_inbox_store']['topic'] = 'after';
 					return array( 'ok' => true );
 				},
+				'meta'                => array(
+					'annotations' => array( 'destructive' => true ),
+				),
 				'safety'              => array(
-					'destructive' => true,
-					'snapshot'    => array(
+					'snapshot'   => array(
 						'inbox' => array( 'topic' ),
 					),
-					'collectors'  => array(
+					'collectors' => array(
 						'inbox' => $collector,
 					),
 				),

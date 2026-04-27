@@ -98,9 +98,11 @@ final class WooCommercePackTest extends WP_UnitTestCase {
 					),
 					'required'   => array( 'product_id', 'regular_price' ),
 				),
+				'meta'                => array(
+					'annotations' => array( 'destructive' => true ),
+				),
 				'safety'              => array(
-					'destructive' => true,
-					'snapshot'    => static function ( mixed $input ): array {
+					'snapshot' => static function ( mixed $input ): array {
 						$pid = (int) ( $input['product_id'] ?? 0 );
 						return array(
 							'post_meta' => array(
@@ -169,9 +171,11 @@ final class WooCommercePackTest extends WP_UnitTestCase {
 					),
 					'required'   => array( 'product_id', 'regular_price' ),
 				),
+				'meta'                => array(
+					'annotations' => array( 'destructive' => true ),
+				),
 				'safety'              => array(
-					'destructive' => true,
-					'snapshot'    => static function ( mixed $input ): array {
+					'snapshot' => static function ( mixed $input ): array {
 						$pid = (int) ( $input['product_id'] ?? 0 );
 						return array(
 							'post_meta' => array(

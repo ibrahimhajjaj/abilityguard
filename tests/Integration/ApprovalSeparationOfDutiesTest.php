@@ -112,8 +112,10 @@ final class ApprovalSeparationOfDutiesTest extends WP_UnitTestCase {
 				'category'            => self::CATEGORY,
 				'permission_callback' => '__return_true',
 				'execute_callback'    => static fn() => array( 'ok' => true ),
+				'meta'                => array(
+					'annotations' => array( 'destructive' => true ),
+				),
 				'safety'              => array(
-					'destructive'       => true,
 					'requires_approval' => true,
 				),
 			)
