@@ -296,6 +296,31 @@ final class RestController {
 				'callback'            => array( __CLASS__, 'do_reject' ),
 			)
 		);
+
+		register_rest_route(
+			self::NAMESPACE,
+			'/dry-run/(?P<invocation_id>[A-Za-z0-9-]+)',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'permission_callback' => array( __CLASS__, 'check_perms' ),
+				'callback'            => array( __CLASS__, 'get_dry_run' ),
+			)
+		);
+	}
+
+	/**
+	 * GET /dry-run/{invocation_id}: returns the diff captured during a dry run.
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 *
+	 * @return \WP_REST_Response|\WP_Error
+	 */
+	public static function get_dry_run( \WP_REST_Request $request ): mixed {
+		$result = \AbilityGuard\Safety\DryRun::fetch_result( (string) $request->get_param( 'invocation_id' ) );
+		if ( $result instanceof \WP_Error ) {
+			return $result;
+		}
+		return new \WP_REST_Response( $result, 200 );
 	}
 
 	/**

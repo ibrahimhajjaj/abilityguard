@@ -4,11 +4,13 @@ declare( strict_types=1 );
 
 namespace AbilityGuard\Tests\Integration\Safety;
 
+use AbilityGuard\Audit\LogMeta;
 use AbilityGuard\Audit\LogRepository;
 use AbilityGuard\Installer;
 use AbilityGuard\Safety\DryRun;
 use WP_Abilities_Registry;
 use WP_Ability_Categories_Registry;
+use WP_REST_Request;
 use WP_UnitTestCase;
 
 /**
@@ -56,7 +58,7 @@ final class DryRunTest extends WP_UnitTestCase {
 		return $result;
 	}
 
-	public function test_dry_run_rolls_back_option_change_and_returns_envelope(): void {
+	public function test_dry_run_returns_raw_result_and_persists_diff(): void {
 		update_option( 'dryrun_demo_threshold', 'before' );
 
 		$ability_name = 'abilityguard-tests/dry-run-bump';
@@ -68,6 +70,16 @@ final class DryRunTest extends WP_UnitTestCase {
 				'category'            => 'abilityguard-tests',
 				'permission_callback' => '__return_true',
 				'input_schema'        => array( 'type' => 'object' ),
+				// Strict output_schema: response must match this. The whole
+				// point of the new dry-run contract is that this still
+				// validates even when dry-run is on.
+				'output_schema'       => array(
+					'type'     => 'object',
+					'required' => array( 'changed' ),
+					'properties' => array(
+						'changed' => array( 'type' => 'boolean' ),
+					),
+				),
 				'execute_callback'    => static function () {
 					update_option( 'dryrun_demo_threshold', 'after' );
 					return array( 'changed' => true );
@@ -87,25 +99,126 @@ final class DryRunTest extends WP_UnitTestCase {
 		$ability  = wp_get_ability( $ability_name );
 		$response = $ability->execute( array() );
 
-		$this->assertIsArray( $response );
-		$this->assertArrayHasKey( 'result', $response );
-		$this->assertArrayHasKey( 'diff', $response );
-		$this->assertArrayHasKey( 'rolled_back', $response );
-		$this->assertTrue( $response['rolled_back'] );
-		$this->assertSame( array( 'changed' => true ), $response['result'] );
-
-		// Diff captures the surface change.
-		$diff_keys = array_column( $response['diff'], 'key' );
-		$this->assertContains( 'dryrun_demo_threshold', $diff_keys );
+		// Raw result, validates against output_schema.
+		$this->assertSame( array( 'changed' => true ), $response );
 
 		// Option is back to pre-state after auto-rollback.
 		$this->assertSame( 'before', get_option( 'dryrun_demo_threshold' ) );
 
-		// Audit row reflects rolled_back status.
+		// Audit row reflects rolled_back status + dry_run meta.
 		$repo = new LogRepository();
 		$rows = $repo->list( array( 'ability_name' => $ability_name ) );
 		$this->assertCount( 1, $rows );
 		$this->assertSame( 'rolled_back', $rows[0]['status'] );
+
+		$log_id = (int) $rows[0]['id'];
+		$this->assertSame( array( '1' ), LogMeta::get_all( $log_id, 'dry_run' ) );
+		$this->assertSame( array( '1' ), LogMeta::get_all( $log_id, 'dry_run_rolled_back' ) );
+
+		// Diff persisted as JSON.
+		$diff_meta = LogMeta::get_all( $log_id, 'dry_run_diff' );
+		$this->assertNotEmpty( $diff_meta );
+		$diff = json_decode( $diff_meta[0], true );
+		$this->assertIsArray( $diff );
+		$diff_keys = array_column( $diff, 'key' );
+		$this->assertContains( 'dryrun_demo_threshold', $diff_keys );
+
+		// fetch_result helper returns the same data the REST endpoint does.
+		$invocation_id = (string) $rows[0]['invocation_id'];
+		$fetched       = DryRun::fetch_result( $invocation_id );
+		$this->assertIsArray( $fetched );
+		$this->assertSame( $invocation_id, $fetched['invocation_id'] );
+		$this->assertTrue( $fetched['rolled_back'] );
+		$this->assertContains( 'dryrun_demo_threshold', array_column( $fetched['diff'], 'key' ) );
+	}
+
+	public function test_dry_run_rest_endpoint_returns_diff(): void {
+		update_option( 'dryrun_rest_opt', 'before' );
+
+		$ability_name = 'abilityguard-tests/dry-run-rest';
+		$this->register_via_init(
+			$ability_name,
+			static fn() => array(
+				'label'               => 'Bump option',
+				'description'         => 'Verifies REST endpoint surfaces the diff',
+				'category'            => 'abilityguard-tests',
+				'permission_callback' => '__return_true',
+				'input_schema'        => array( 'type' => 'object' ),
+				'execute_callback'    => static function () {
+					update_option( 'dryrun_rest_opt', 'after' );
+					return array( 'ok' => true );
+				},
+				'meta'                => array(
+					'annotations' => array( 'destructive' => true ),
+				),
+				'safety'              => array(
+					'dry_run'  => true,
+					'snapshot' => array(
+						'options' => array( 'dryrun_rest_opt' ),
+					),
+				),
+			)
+		);
+
+		$ability = wp_get_ability( $ability_name );
+		$ability->execute( array() );
+
+		$repo          = new LogRepository();
+		$rows          = $repo->list( array( 'ability_name' => $ability_name ) );
+		$invocation_id = (string) $rows[0]['invocation_id'];
+
+		$user = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $user );
+
+		$request  = new WP_REST_Request( 'GET', '/abilityguard/v1/dry-run/' . $invocation_id );
+		$response = rest_do_request( $request );
+
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		$this->assertSame( $invocation_id, $data['invocation_id'] );
+		$this->assertTrue( $data['rolled_back'] );
+		$this->assertContains( 'dryrun_rest_opt', array_column( $data['diff'], 'key' ) );
+	}
+
+	public function test_dry_run_rest_endpoint_404_when_invocation_unknown(): void {
+		$user = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $user );
+
+		$request  = new WP_REST_Request( 'GET', '/abilityguard/v1/dry-run/no-such-invocation-id' );
+		$response = rest_do_request( $request );
+		$this->assertSame( 404, $response->get_status() );
+	}
+
+	public function test_rest_endpoint_409_when_not_a_dry_run(): void {
+		// Run an ability WITHOUT dry-run, then ask the endpoint about it.
+		$ability_name = 'abilityguard-tests/dry-run-rest-409';
+		$this->register_via_init(
+			$ability_name,
+			static fn() => array(
+				'label'               => 'Plain run',
+				'description'         => 'No dry-run; endpoint should refuse to return a diff for it',
+				'category'            => 'abilityguard-tests',
+				'permission_callback' => '__return_true',
+				'input_schema'        => array( 'type' => 'object' ),
+				'execute_callback'    => static fn() => array( 'ok' => true ),
+				'safety'              => array(
+					'snapshot'         => array( 'options' => array( 'dryrun_409_opt' ) ),
+					'skip_drift_check' => true,
+				),
+			)
+		);
+		wp_get_ability( $ability_name )->execute( array() );
+
+		$repo          = new LogRepository();
+		$rows          = $repo->list( array( 'ability_name' => $ability_name ) );
+		$invocation_id = (string) $rows[0]['invocation_id'];
+
+		$user = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $user );
+
+		$request  = new WP_REST_Request( 'GET', '/abilityguard/v1/dry-run/' . $invocation_id );
+		$response = rest_do_request( $request );
+		$this->assertSame( 409, $response->get_status() );
 	}
 
 	public function test_dry_run_absent_leaves_behavior_unchanged(): void {
@@ -150,7 +263,7 @@ final class DryRunTest extends WP_UnitTestCase {
 		$this->assertSame( 'ok', $rows[0]['status'] );
 	}
 
-	public function test_dry_run_without_snapshot_config_returns_note(): void {
+	public function test_dry_run_without_snapshot_config_returns_raw_result_and_marks_not_rolled_back(): void {
 		$ability_name = 'abilityguard-tests/dry-run-no-snapshot';
 		$this->register_via_init(
 			$ability_name,
@@ -171,11 +284,22 @@ final class DryRunTest extends WP_UnitTestCase {
 		$ability  = wp_get_ability( $ability_name );
 		$response = $ability->execute( array() );
 
-		$this->assertIsArray( $response );
-		$this->assertSame( array( 'ok' => true ), $response['result'] );
-		$this->assertFalse( $response['rolled_back'] );
-		$this->assertArrayHasKey( 'note', $response );
-		$this->assertStringContainsString( 'no snapshot config', $response['note'] );
+		// Raw result; nothing to reshape.
+		$this->assertSame( array( 'ok' => true ), $response );
+
+		$repo          = new LogRepository();
+		$rows          = $repo->list( array( 'ability_name' => $ability_name ) );
+		$invocation_id = (string) $rows[0]['invocation_id'];
+		$log_id        = (int) $rows[0]['id'];
+
+		// Caller can still tell it was a dry run, but rolled_back is false.
+		$this->assertSame( array( '1' ), LogMeta::get_all( $log_id, 'dry_run' ) );
+		$this->assertSame( array( '0' ), LogMeta::get_all( $log_id, 'dry_run_rolled_back' ) );
+
+		$fetched = DryRun::fetch_result( $invocation_id );
+		$this->assertIsArray( $fetched );
+		$this->assertFalse( $fetched['rolled_back'] );
+		$this->assertSame( array(), $fetched['diff'] );
 	}
 
 	public function test_rollback_failure_marks_audit_row_error_and_returns_wp_error(): void {

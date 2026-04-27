@@ -91,3 +91,19 @@ if ( ! function_exists( 'abilityguard_approval_url' ) ) {
 		);
 	}
 }
+
+if ( ! function_exists( 'abilityguard_get_dry_run_result' ) ) {
+
+	/**
+	 * Fetch a dry-run diff for a previous invocation. Returns the same shape
+	 * the GET /abilityguard/v1/dry-run/{invocation_id} REST endpoint returns.
+	 *
+	 * @param string $invocation_id Invocation UUID returned in the
+	 *                              X-AbilityGuard-Invocation-Id header.
+	 *
+	 * @return array{invocation_id: string, ability_name: string, executed_at: string, rolled_back: bool, diff: array<string,mixed>}|\WP_Error
+	 */
+	function abilityguard_get_dry_run_result( string $invocation_id ): array|\WP_Error {
+		return \AbilityGuard\Safety\DryRun::fetch_result( $invocation_id );
+	}
+}
