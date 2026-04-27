@@ -1,7 +1,6 @@
 <?php
 /**
- * Per-user, per-ability rate limiter. Per-call opt-in via
- * safety.max_calls_per_hour.
+ * Multi-policy sliding-window rate limiter with IETF RateLimit headers.
  *
  * @package AbilityGuard
  */
@@ -12,57 +11,91 @@ namespace AbilityGuard\Safety;
 
 defined( 'ABSPATH' ) || exit;
 
+use AbilityGuard\Safety\RateLimit\ObjectCacheStorage;
+use AbilityGuard\Safety\RateLimit\Policy;
+use AbilityGuard\Safety\RateLimit\RedisStorage;
+use AbilityGuard\Safety\RateLimit\Storage;
+use AbilityGuard\Safety\RateLimit\TransientStorage;
+use AbilityGuard\Safety\RateLimit\Window;
+use Throwable;
 use WP_Error;
+use WP_HTTP_Response;
+use WP_REST_Request;
+use WP_REST_Response;
 
 /**
- * Cheap rolling-window rate limiter for ability invocations.
+ * Multi-policy sliding-window-counter rate limiter.
  *
- * Plugs into the abilityguard_pre_execute_decision filter (the same seam
- * DryRun uses for post-execute work). When safety.max_calls_per_hour is set
- * for an ability, we maintain a transient-backed counter keyed by
- * (user_id, ability_name). Once the counter reaches the limit we short-
- * circuit the wrap with a 429 WP_Error before execute_callback runs, so the
- * audit row finalizes as 'error' without the side effects.
+ * Algorithm: Cloudflare/Upstash sliding-window-counter, evaluated once per
+ * declared policy. The request is admitted iff every policy admits it.
+ * Estimated rate per policy = prev_count * ((W - elapsed)/W) + curr_count.
  *
- * Config shape (chose flat over nested for parity with safety.dry_run):
+ * Storage: an interface with three implementations, picked at boot time:
+ *
+ *   1. RedisStorage      , wp_cache_incr against a Redis drop-in.
+ *   2. ObjectCacheStorage, wp_cache_incr against any external object cache
+ *                           that honors the wp_cache_* atomic contract.
+ *   3. TransientStorage  , get/set_transient fallback. NOT atomic; off-by-N
+ *                           on concurrent calls is documented and accepted.
+ *
+ * Sites can swap a custom impl via the `abilityguard_rate_limiter_storage`
+ * filter.
+ *
+ * Headers: IETF draft-ietf-httpapi-ratelimit-headers-10 only. We emit
+ * `RateLimit-Policy` and `RateLimit` on every dispatch of an AbilityGuard
+ * route, plus `Retry-After` (RFC 7231) on 429. We deliberately do NOT
+ * emit vendor `X-RateLimit-*`, the IETF draft handles multi-policy
+ * natively, the legacy convention does not.
+ *
+ * Principal resolution, in order:
+ *
+ *   1. Authenticated WP user → `u:{user_id}`.
+ *   2. App-pw / OAuth client (via `$context['caller_id']`) → `c:{caller_id}`.
+ *   3. Anonymous → `ip:{sha1(REMOTE_ADDR)[0:12]}`.
+ *
+ * On multisite the principal is suffixed with `@{blog_id}` so sub-sites
+ * are separate trust domains. Filterable via `abilityguard_rate_limit_principal`.
+ *
+ * Config shape (long-form only, no shorthand):
  *
  *     'safety' => array(
- *         'max_calls_per_hour' => 60,
+ *         'rate_limits' => array(
+ *             'policies' => array(
+ *                 array( 'id' => 'burst',     'limit' => 5,  'window' => 1 ),
+ *                 array( 'id' => 'sustained', 'limit' => 60, 'window' => 60 ),
+ *             ),
+ *         ),
  *     ),
  *
- * Window length is 3600s by default and tunable per call via:
+ * The recommended pair for AI-agent abilities is `[burst=5/1s, sustained=60/60s]`.
  *
- *     apply_filters( 'abilityguard_rate_limit_window_seconds', 3600,
- *                    $ability_name, $user_id );
- *
- * Bucket semantics: each (user_id, ability) pair gets its own counter.
- * Unauthenticated callers (user_id = 0) share a single bucket per ability;
- * IP-bucketing can be added later if abuse becomes a real signal.
- *
- * Race-condition note: WP transients are not atomic across concurrent
- * requests. Two simultaneous calls can both read N-1 and both write N,
- * letting one slip past the cap. For ops-quota-control on AI agents this
- * is acceptable: the goal is to stop runaway loops, not enforce a hard
- * SLA. Sites that need stricter accounting can swap the storage by
- * registering their own callback at higher priority on
- * abilityguard_pre_execute_decision.
+ * Fail-open on storage exception (Stripe pattern): a throwing storage
+ * MUST NOT block ability execution, we log via error_log and admit.
  */
 final class RateLimiter {
 
 	/**
-	 * Default rolling window in seconds.
-	 */
-	private const DEFAULT_WINDOW = 3600;
-
-	/**
 	 * Boot guard.
-	 *
-	 * @var bool
 	 */
 	private static bool $registered = false;
 
 	/**
-	 * Wire the pre-execute filter. Idempotent.
+	 * Selected storage backend. Lazily resolved on first use.
+	 */
+	private static ?Storage $storage = null;
+
+	/**
+	 * Per-request memo of the latest pre_execute_decision evaluation, so
+	 * rest_post_dispatch can attach matching headers without reading state
+	 * again. A simple LIFO is fine, REST dispatch resolves a single ability
+	 * per HTTP request in the abilities-api shape.
+	 *
+	 * @var array<int, array{policy:Policy, remaining:int, reset:int, exhausted:bool}>
+	 */
+	private static array $last_dispatch_state = array();
+
+	/**
+	 * Wire the filter seams. Idempotent.
 	 */
 	public static function register(): void {
 		if ( self::$registered ) {
@@ -70,6 +103,7 @@ final class RateLimiter {
 		}
 		self::$registered = true;
 		add_filter( 'abilityguard_pre_execute_decision', array( self::class, 'maybe_block' ), 10, 4 );
+		add_filter( 'rest_post_dispatch', array( self::class, 'emit_headers' ), 10, 3 );
 	}
 
 	/**
@@ -78,14 +112,42 @@ final class RateLimiter {
 	 * @internal
 	 */
 	public static function reset_for_tests(): void {
-		self::$registered = false;
+		self::$registered          = false;
+		self::$storage             = null;
+		self::$last_dispatch_state = array();
 		remove_filter( 'abilityguard_pre_execute_decision', array( self::class, 'maybe_block' ), 10 );
+		remove_filter( 'rest_post_dispatch', array( self::class, 'emit_headers' ), 10 );
 	}
 
 	/**
-	 * Filter callback: block when the per-user/per-ability quota is exhausted.
+	 * Resolve the storage backend exactly once per request. The picker
+	 * order (Redis > ObjectCache > Transient) is filterable via
+	 * `abilityguard_rate_limiter_storage`.
+	 */
+	public static function storage(): Storage {
+		if ( null === self::$storage ) {
+			self::$storage = self::pick_storage();
+			/**
+			 * Filter the rate-limiter storage backend.
+			 *
+			 * @since 1.3.0
+			 *
+			 * @param Storage $storage Selected backend.
+			 */
+			$filtered = apply_filters( 'abilityguard_rate_limiter_storage', self::$storage );
+			if ( $filtered instanceof Storage ) {
+				self::$storage = $filtered;
+			}
+		}
+		return self::$storage;
+	}
+
+	/**
+	 * Pre-execute filter: evaluate every declared policy. Admit iff all
+	 * pass. On reject return a 429 WP_Error with `retry_after` set to the
+	 * MAX of the exhausted policies' time-to-reset.
 	 *
-	 * @param mixed                $decision     Existing decision (null = proceed, WP_Error = blocked).
+	 * @param mixed                $decision     Existing decision (null = proceed).
 	 * @param string               $ability_name Ability name.
 	 * @param mixed                $input        Input (unused).
 	 * @param array<string, mixed> $context      invocation_id, caller_type, caller_id, destructive, safety.
@@ -98,103 +160,275 @@ final class RateLimiter {
 			return $decision;
 		}
 
-		$safety = is_array( $context['safety'] ?? null ) ? $context['safety'] : array();
-		$limit  = isset( $safety['max_calls_per_hour'] ) ? (int) $safety['max_calls_per_hour'] : 0;
-
-		// No config or non-positive limit: no-op.
-		if ( $limit <= 0 ) {
+		$safety   = is_array( $context['safety'] ?? null ) ? $context['safety'] : array();
+		$policies = Policy::from_safety( $safety );
+		if ( array() === $policies ) {
 			return $decision;
 		}
 
-		$user_id = (int) get_current_user_id();
-		$window  = self::resolve_window( $ability_name, $user_id );
-		$key     = self::transient_key( $user_id, $ability_name );
+		$principal    = self::resolve_principal( $context );
+		$ability_hash = substr( md5( $ability_name ), 0, 16 );
+		$now          = self::now();
 
-		$current = (int) get_transient( $key );
+		$state      = array();
+		$exhausted  = array();
+		$retry_after = 0;
 
-		if ( $current >= $limit ) {
-			$retry_after = self::estimate_retry_after( $key, $window );
+		foreach ( $policies as $policy ) {
+			try {
+				$counts = self::counts_for( $policy, $principal, $ability_hash, $now );
+			} catch ( Throwable $e ) {
+				// Fail-open (Stripe pattern). A throwing backend must not
+				// block the call; log and admit this policy.
+				error_log( sprintf( 'AbilityGuard rate limiter storage error: %s', $e->getMessage() ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				continue;
+			}
+
+			$estimate = Window::estimate( $counts['prev'], $counts['curr'], $now, $policy->window );
+			$reset    = Window::seconds_until_reset( $now, $policy->window );
+
+			if ( $estimate >= $policy->limit ) {
+				$exhausted[]  = $policy;
+				$retry_after  = max( $retry_after, $reset );
+				$state[]      = array(
+					'policy'    => $policy,
+					'remaining' => 0,
+					'reset'     => $reset,
+					'exhausted' => true,
+				);
+				continue;
+			}
+
+			// Admitted by this policy: record the increment.
+			try {
+				$ttl     = $policy->window * 2;
+				$key     = self::bucket_key( $policy, $principal, $ability_hash, Window::bucket_index( $now, $policy->window ) );
+				$new_curr = self::storage()->increment( $key, $ttl );
+				$counts['curr'] = $new_curr;
+			} catch ( Throwable $e ) {
+				error_log( sprintf( 'AbilityGuard rate limiter storage error: %s', $e->getMessage() ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			}
+
+			$post_estimate = Window::estimate( $counts['prev'], $counts['curr'], $now, $policy->window );
+			$remaining     = (int) max( 0, floor( $policy->limit - $post_estimate ) );
+
+			$state[] = array(
+				'policy'    => $policy,
+				'remaining' => $remaining,
+				'reset'     => $reset,
+				'exhausted' => false,
+			);
+		}
+
+		self::$last_dispatch_state = $state;
+
+		if ( array() !== $exhausted ) {
+			$ids = array_map( static fn( Policy $p ): string => $p->id, $exhausted );
 			return new WP_Error(
 				'abilityguard_rate_limited',
 				sprintf(
-					'Rate limit exceeded for ability "%s": %d calls per %d seconds.',
+					'Rate limit exceeded for ability "%s" (policies: %s).',
 					$ability_name,
-					$limit,
-					$window
+					implode( ', ', $ids )
 				),
 				array(
 					'status'      => 429,
 					'retry_after' => $retry_after,
-					'limit'       => $limit,
-					'window'      => $window,
+					'policies'    => array_map(
+						static fn( Policy $p ): array => array(
+							'id'     => $p->id,
+							'limit'  => $p->limit,
+							'window' => $p->window,
+						),
+						$exhausted
+					),
 				)
 			);
 		}
-
-		// Increment + (re)set the transient. set_transient resets the TTL on
-		// the first hit of the window; subsequent hits within the same window
-		// keep the original expiry because we read it back via the key alone.
-		// Tradeoff: we use a sliding-on-first-call window. Good enough for
-		// quota control, simpler than implementing fixed wall-clock buckets.
-		set_transient( $key, $current + 1, $window );
 
 		return $decision;
 	}
 
 	/**
-	 * Build a transient key under the option_name 191-char limit.
+	 * rest_post_dispatch listener: attach IETF RateLimit headers to any
+	 * AbilityGuard-routed response. Scoped by route prefix so we don't
+	 * pollute other plugins' REST responses.
 	 *
-	 * The literal ability name can include slashes and arbitrary chars so
-	 * we hash it. Keeps keys short and avoids surprises with collations.
+	 * @param WP_HTTP_Response|WP_REST_Response|WP_Error $response Response.
+	 * @param mixed                                      $server   REST server (unused).
+	 * @param WP_REST_Request                            $request  Request.
 	 *
-	 * @param int    $user_id      User id (0 for anon).
-	 * @param string $ability_name Ability name.
+	 * @return mixed
 	 */
-	private static function transient_key( int $user_id, string $ability_name ): string {
-		return 'abilityguard_rl_' . $user_id . '_' . substr( md5( $ability_name ), 0, 16 );
+	public static function emit_headers( $response, $server, $request ): mixed {
+		if ( ! $request instanceof WP_REST_Request ) {
+			return $response;
+		}
+		if ( ! self::is_abilityguard_route( $request->get_route() ) ) {
+			return $response;
+		}
+
+		$state = self::$last_dispatch_state;
+		if ( array() === $state ) {
+			return $response;
+		}
+		self::$last_dispatch_state = array();
+
+		$policy_field = array();
+		$rate_field   = array();
+		$blocked      = false;
+		$retry_after  = 0;
+
+		foreach ( $state as $row ) {
+			$p              = $row['policy'];
+			$policy_field[] = sprintf( '"%s";q=%d;w=%d', $p->id, $p->limit, $p->window );
+			$rate_field[]   = sprintf( '"%s";r=%d;t=%d', $p->id, $row['remaining'], $row['reset'] );
+			if ( $row['exhausted'] ) {
+				$blocked     = true;
+				$retry_after = max( $retry_after, (int) $row['reset'] );
+			}
+		}
+
+		if ( $response instanceof WP_REST_Response || $response instanceof WP_HTTP_Response ) {
+			$response->header( 'RateLimit-Policy', implode( ', ', $policy_field ) );
+			$response->header( 'RateLimit', implode( ', ', $rate_field ) );
+			if ( $blocked ) {
+				$response->header( 'Retry-After', (string) $retry_after );
+			}
+		}
+
+		return $response;
 	}
 
 	/**
-	 * Resolve the rolling-window length for this call.
+	 * Resolve the principal for the current call. Three-tier fallback,
+	 * filterable. Multisite-aware: includes the current blog id so
+	 * sub-sites are separate trust domains.
 	 *
-	 * @param string $ability_name Ability name.
-	 * @param int    $user_id      User id.
+	 * @param array<string, mixed> $context Wrapper context.
 	 */
-	private static function resolve_window( string $ability_name, int $user_id ): int {
+	private static function resolve_principal( array $context ): string {
+		$user_id = (int) get_current_user_id();
+		if ( $user_id > 0 ) {
+			$base = 'u:' . $user_id;
+		} else {
+			$caller_id = isset( $context['caller_id'] ) ? (string) $context['caller_id'] : '';
+			if ( '' !== $caller_id ) {
+				$base = 'c:' . $caller_id;
+			} else {
+				$ip   = isset( $_SERVER['REMOTE_ADDR'] ) ? (string) $_SERVER['REMOTE_ADDR'] : '';
+				$hash = '' === $ip ? 'unknown' : substr( sha1( $ip ), 0, 12 );
+				$base = 'ip:' . $hash;
+			}
+		}
+
+		if ( function_exists( 'is_multisite' ) && is_multisite() ) {
+			$base .= '@' . (int) get_current_blog_id();
+		}
+
 		/**
-		 * Filter the rate-limit rolling window in seconds.
+		 * Filter the resolved principal.
 		 *
 		 * @since 1.3.0
 		 *
-		 * @param int    $seconds      Default 3600.
-		 * @param string $ability_name Ability name.
-		 * @param int    $user_id      User id (0 for anon).
+		 * @param string               $principal Resolved principal id.
+		 * @param array<string, mixed> $context   Wrapper context.
 		 */
-		$seconds = (int) apply_filters(
-			'abilityguard_rate_limit_window_seconds',
-			self::DEFAULT_WINDOW,
-			$ability_name,
-			$user_id
-		);
-		return $seconds > 0 ? $seconds : self::DEFAULT_WINDOW;
+		$filtered = apply_filters( 'abilityguard_rate_limit_principal', $base, $context );
+		return is_string( $filtered ) && '' !== $filtered ? $filtered : $base;
 	}
 
 	/**
-	 * Best-effort retry-after estimate. WP transients store a separate
-	 * _transient_timeout_<key> option whose value is the absolute expiry
-	 * timestamp; we read it directly to give callers a real number rather
-	 * than the full window length. Falls back to the window if the timeout
-	 * row is missing (e.g. external object cache).
+	 * Read the (prev, curr) counter pair for a policy, in one place so
+	 * the storage round-trip count is visible.
 	 *
-	 * @param string $key    Transient key (without the _transient_ prefix).
-	 * @param int    $window Window in seconds.
+	 * @return array{prev:int, curr:int}
 	 */
-	private static function estimate_retry_after( string $key, int $window ): int {
-		$expiry = (int) get_option( '_transient_timeout_' . $key, 0 );
-		if ( $expiry > 0 ) {
-			$delta = $expiry - time();
-			return $delta > 0 ? $delta : 0;
+	private static function counts_for( Policy $policy, string $principal, string $ability_hash, int $now ): array {
+		$bucket   = Window::bucket_index( $now, $policy->window );
+		$curr_key = self::bucket_key( $policy, $principal, $ability_hash, $bucket );
+		$prev_key = self::bucket_key( $policy, $principal, $ability_hash, $bucket - 1 );
+
+		$storage = self::storage();
+		return array(
+			'prev' => $storage->get( $prev_key ),
+			'curr' => $storage->get( $curr_key ),
+		);
+	}
+
+	/**
+	 * Build a bucket key. Layout:
+	 *
+	 *     ag:rl:v1:{policy_id}:{principal}:{ability_hash16}:{bucket_index}
+	 *
+	 * For TransientStorage this becomes the option_name; the 191-char
+	 * `wp_options.option_name` limit is comfortably respected because we
+	 * hash the ability name to 16 hex chars (kept from the previous
+	 * implementation).
+	 */
+	private static function bucket_key( Policy $policy, string $principal, string $ability_hash, int $bucket_index ): string {
+		// Replace `:` with `_` so the key is also valid as a transient
+		// option_name (which forbids no chars in particular but `:` reads
+		// poorly in wp_options listings).
+		$safe_principal = str_replace( ':', '_', $principal );
+		return sprintf( 'ag_rl_v1_%s_%s_%s_%d', $policy->id, $safe_principal, $ability_hash, $bucket_index );
+	}
+
+	/**
+	 * Pick the best available storage backend.
+	 */
+	private static function pick_storage(): Storage {
+		// `wp_using_ext_object_cache()` is true when a drop-in is loaded.
+		// We can't reliably introspect "is this drop-in Redis or Memcached"
+		// without coupling to drop-in internals, so we use Redis-class
+		// constants as the cheapest signal: the wordpress/redis-cache
+		// plugin defines `WP_REDIS_PREFIX` and a global $redis_object_cache.
+		if ( function_exists( 'wp_using_ext_object_cache' ) && \wp_using_ext_object_cache() ) {
+			if ( class_exists( '\\WP_Object_Cache' ) && (
+				defined( 'WP_REDIS_PREFIX' )
+				|| isset( $GLOBALS['redis_object_cache'] )
+				|| isset( $GLOBALS['wp_object_cache']->redis )
+			) ) {
+				return new RedisStorage();
+			}
+			return new ObjectCacheStorage();
 		}
-		return $window;
+		return new TransientStorage();
+	}
+
+	/**
+	 * AbilityGuard route check for `rest_post_dispatch` scoping. Two
+	 * surfaces qualify:
+	 *
+	 *   - The plugin's own /abilityguard/v1/* admin REST routes.
+	 *   - The abilities-api /wp-abilities/v1/abilities/.../run endpoint
+	 *     where ability invocations land.
+	 */
+	private static function is_abilityguard_route( string $route ): bool {
+		if ( '' === $route ) {
+			return false;
+		}
+		if ( str_starts_with( $route, '/abilityguard/' ) ) {
+			return true;
+		}
+		if ( str_starts_with( $route, '/wp-abilities/' ) ) {
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Clock seam. Filterable so tests can straddle a bucket boundary
+	 * without sleeping.
+	 */
+	private static function now(): int {
+		/**
+		 * Filter the current unix time used by the rate limiter. Test seam.
+		 *
+		 * @since 1.3.0
+		 *
+		 * @param int $now Default `time()`.
+		 */
+		return (int) apply_filters( 'abilityguard_rate_limit_now', time() );
 	}
 }
