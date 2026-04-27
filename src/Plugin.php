@@ -48,6 +48,7 @@ final class Plugin {
 		( new Registry\InvocationObserver( $snapshots, $audit ) )->register();
 
 		Safety\DryRun::register();
+		Safety\RateLimiter::register();
 
 		( new Retention\Scheduler() )->register();
 
