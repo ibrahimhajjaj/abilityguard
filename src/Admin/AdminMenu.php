@@ -113,14 +113,6 @@ final class AdminMenu {
 			wp_die( esc_html__( 'You do not have permission to view this page.', 'abilityguard' ) );
 		}
 		echo '<div class="wrap abilityguard-wrap"><div id="abilityguard-root"></div></div>';
-		echo '<script>document.addEventListener("DOMContentLoaded",function(){var c=document.getElementById("wpcontent");if(c){c.classList.add("abilityguard-fullbleed")}});</script>';
-		echo '<style>
-			.abilityguard-wrap{margin:0;padding:0;}
-			.abilityguard-wrap > #wpfooter,#wpfooter{display:none;}
-			body.toplevel_page_abilityguard #wpcontent,body.tools_page_abilityguard #wpcontent{padding-left:0;}
-			.abilityguard-wrap .ag-root{margin-left:-20px;margin-right:-20px;}
-			.ag-approval-flash{box-shadow:0 0 0 2px var(--accent, #ff9b06) !important;background:rgba(255,155,6,0.08) !important;}
-		</style>';
 	}
 
 	/**

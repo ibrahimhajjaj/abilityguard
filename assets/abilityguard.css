@@ -1757,3 +1757,14 @@ button[disabled] { opacity: 0.4; cursor: not-allowed; }
 .hy-narrow .hy-card.hy-span-2 { grid-column: span 1; }
 .hy-narrow .hy-diff-row { grid-template-columns: 1fr; gap: 4px; }
 .hy-narrow .hy-diff-arrow { display: none; }
+
+/* Page-shell rules: wp-admin chrome adjustments for the AbilityGuard page. */
+.abilityguard-wrap { margin: 0; padding: 0; }
+.abilityguard-wrap > #wpfooter, #wpfooter { display: none; }
+body.toplevel_page_abilityguard #wpcontent,
+body.tools_page_abilityguard #wpcontent { padding-left: 0; }
+.abilityguard-wrap .ag-root { margin-left: -20px; margin-right: -20px; }
+.ag-approval-flash {
+  box-shadow: 0 0 0 2px var(--accent, #ff9b06) !important;
+  background: rgba(255, 155, 6, 0.08) !important;
+}
