@@ -51,11 +51,18 @@ function abilityguard_uninstall_single_site(): void {
 
 /**
  * Best-effort purge of the FileBlobStore staging directory under
- * wp-content. Shared across the whole install - purge once, not per
+ * uploads/. Shared across the whole install - purge once, not per
  * subsite. Failures here are non-fatal.
  */
 function abilityguard_uninstall_purge_staging(): void {
-	$dir = trailingslashit( WP_CONTENT_DIR ) . 'abilityguard-staging';
+	$uploads = wp_upload_dir( null, false );
+	$basedir = is_array( $uploads ) && ! empty( $uploads['basedir'] ) && is_string( $uploads['basedir'] )
+		? $uploads['basedir']
+		: '';
+	if ( '' === $basedir ) {
+		return;
+	}
+	$dir = trailingslashit( $basedir ) . 'abilityguard-mcp';
 	if ( ! is_dir( $dir ) ) {
 		return;
 	}

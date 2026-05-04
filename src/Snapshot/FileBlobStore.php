@@ -15,7 +15,7 @@ use RuntimeException;
 /**
  * Stores file bytes captured by FilesCollector under STRATEGY_FULL_CONTENT.
  *
- * ## Why a sidecar dir, not a DB blob column
+ * ## Why a sidecar dir under uploads/, not a DB blob column
  *
  * File contents have very different size + retention characteristics from
  * the option/meta scalars in the snapshots table. Blobbing into a DB
@@ -40,25 +40,33 @@ use RuntimeException;
 final class FileBlobStore {
 
 	/**
-	 * Subdirectory under wp-content where blobs live.
+	 * Subdirectory name under uploads/ where blobs live.
 	 */
-	private const STAGING_DIR_NAME = 'abilityguard-staging';
+	private const STAGING_DIR_NAME = 'abilityguard-mcp';
 
 	/**
 	 * Absolute path of the staging directory, ensured to exist.
 	 *
-	 * Filterable via `abilityguard_file_blob_dir` for tests / unusual hosts.
+	 * Default: <uploads>/abilityguard-mcp/. Filterable via
+	 * `abilityguard_file_blob_dir` for tests / unusual hosts.
 	 */
 	public static function staging_dir(): string {
-		$default = trailingslashit( WP_CONTENT_DIR ) . self::STAGING_DIR_NAME;
+		$uploads = function_exists( 'wp_upload_dir' ) ? wp_upload_dir( null, false ) : array();
+		$basedir = is_array( $uploads ) && ! empty( $uploads['basedir'] ) && is_string( $uploads['basedir'] )
+			? $uploads['basedir']
+			: sys_get_temp_dir();
+
+		$default = trailingslashit( $basedir ) . self::STAGING_DIR_NAME;
 		$dir     = function_exists( 'apply_filters' )
 			? (string) apply_filters( 'abilityguard_file_blob_dir', $default )
 			: $default;
 
 		if ( ! is_dir( $dir ) ) {
 			wp_mkdir_p( $dir );
-			// Drop sentinel + .htaccess so this dir is never confused with
-			// a third-party archive directory by the FilesCollector excludes.
+			// Sentinel + .htaccess: defense-in-depth even though uploads/
+			// is generally not a writable plugin path. Apache configs vary
+			// across hosts; deny-by-default keeps the encrypted blobs from
+			// being directory-listed or fetched by accident.
 			$marker = trailingslashit( $dir ) . 'index.html';
 			if ( ! file_exists( $marker ) ) {
 				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
