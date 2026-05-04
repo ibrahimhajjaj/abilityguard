@@ -30,6 +30,9 @@ jobs:
       - name: Composer install (production)
         run: composer install --no-dev --prefer-dist --no-progress --optimize-autoloader
 
+      - name: NPM install (admin bundle deps)
+        run: npm ci
+
       - name: Build release zip
         run: bash scripts/build-release.sh
 
