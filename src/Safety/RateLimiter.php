@@ -320,7 +320,9 @@ final class RateLimiter {
 			if ( '' !== $caller_id ) {
 				$base = 'c:' . $caller_id;
 			} else {
-				$ip   = isset( $_SERVER['REMOTE_ADDR'] ) ? (string) $_SERVER['REMOTE_ADDR'] : '';
+				$ip = isset( $_SERVER['REMOTE_ADDR'] )
+					? sanitize_text_field( wp_unslash( (string) $_SERVER['REMOTE_ADDR'] ) )
+					: '';
 				$hash = '' === $ip ? 'unknown' : substr( sha1( $ip ), 0, 12 );
 				$base = 'ip:' . $hash;
 			}
