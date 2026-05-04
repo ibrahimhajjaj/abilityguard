@@ -10,12 +10,7 @@
 
 declare( strict_types=1 );
 
-// Composer's files autoload pulls this into CLI tools (phpunit, phpstan)
-// where ABSPATH is never defined. Still block direct web access; allow
-// CLI through so the test suite can load.
-if ( ! defined( 'ABSPATH' ) && 'cli' !== PHP_SAPI ) {
-	exit;
-}
+defined( 'ABSPATH' ) || exit;
 
 if ( ! function_exists( 'abilityguard_rollback' ) ) {
 

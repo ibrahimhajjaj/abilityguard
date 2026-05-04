@@ -331,6 +331,12 @@ final class FilesCollector implements CollectorInterface {
 	 * target stays within ABSPATH. Defends against a malicious snapshot
 	 * row coercing a write outside the install during restore.
 	 *
+	 * Note on ABSPATH: this is a containment check, not a write-location
+	 * choice. A snapshot may legitimately target any file inside the WP
+	 * install (wp-content, mu-plugins, themes, root .htaccess, etc.), so
+	 * the WP root is the correct anchor here - wp_upload_dir() would be
+	 * too narrow and would reject valid restore targets.
+	 *
 	 * @param string $path Absolute path to validate.
 	 */
 	public static function is_safe_path( string $path ): bool {
