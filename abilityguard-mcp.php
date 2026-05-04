@@ -11,7 +11,7 @@
  * Author URI:        https://github.com/ibrahimhajjaj
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
- * Text Domain:       abilityguard
+ * Text Domain:       abilityguard-mcp
  *
  * @package AbilityGuard
  */

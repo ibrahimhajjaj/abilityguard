@@ -392,7 +392,7 @@ final class FilesCollector implements CollectorInterface {
 			'AbilityGuard FilesCollector',
 			sprintf(
 				/* translators: 1: file path, 2: actual size, 3: configured cap */
-				esc_html__( 'File "%1$s" (%2$d bytes) exceeds the abilityguard_max_file_bytes cap (%3$d). Captured as fingerprint-only; rollback will not restore content for this path.', 'abilityguard' ),
+				esc_html__( 'File "%1$s" (%2$d bytes) exceeds the abilityguard_max_file_bytes cap (%3$d). Captured as fingerprint-only; rollback will not restore content for this path.', 'abilityguard-mcp' ),
 				esc_html( $path ),
 				absint( $size ),
 				absint( $max_bytes )

@@ -5,11 +5,11 @@
 	"testsPort": 18889,
 	"plugins": [],
 	"mappings": {
-		"wp-content/plugins/abilityguard": ".",
+		"wp-content/plugins/abilityguard-mcp": ".",
 		"wp-content/plugins/mcp-adapter": "./tests/fixtures/mcp-adapter"
 	},
 	"lifecycleScripts": {
-		"afterStart": "wp-env run cli wp plugin activate abilityguard && wp-env run tests-cli wp plugin activate abilityguard"
+		"afterStart": "wp-env run cli wp plugin activate abilityguard-mcp && wp-env run tests-cli wp plugin activate abilityguard-mcp"
 	},
 	"config": {
 		"WP_DEBUG": true,

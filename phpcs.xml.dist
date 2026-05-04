@@ -2,7 +2,7 @@
 <ruleset name="AbilityGuard">
 	<description>AbilityGuard coding standards.</description>
 
-	<file>abilityguard.php</file>
+	<file>abilityguard-mcp.php</file>
 	<file>src</file>
 	<file>tests</file>
 	<file>examples</file>
@@ -30,7 +30,7 @@
 
 	<rule ref="WordPress.WP.I18n">
 		<properties>
-			<property name="text_domain" type="array" value="abilityguard,ag-woo-pack,ag-ff-pack"/>
+			<property name="text_domain" type="array" value="abilityguard-mcp,ag-woo-pack,ag-ff-pack"/>
 		</properties>
 	</rule>
 

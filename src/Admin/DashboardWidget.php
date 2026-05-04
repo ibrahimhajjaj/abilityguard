@@ -46,7 +46,7 @@ final class DashboardWidget {
 		}
 		wp_add_dashboard_widget(
 			self::WIDGET_ID,
-			__( 'AbilityGuard', 'abilityguard' ),
+			__( 'AbilityGuard', 'abilityguard-mcp' ),
 			array( __CLASS__, 'render' )
 		);
 	}
@@ -61,12 +61,12 @@ final class DashboardWidget {
 		$top     = isset( $stats['top_abilities'] ) && is_array( $stats['top_abilities'] ) ? $stats['top_abilities'] : array();
 
 		$tile_keys = array(
-			'pending'     => __( 'Pending', 'abilityguard' ),
-			'approved'    => __( 'Approved', 'abilityguard' ),
-			'rejected'    => __( 'Rejected', 'abilityguard' ),
-			'ok'          => __( 'OK', 'abilityguard' ),
-			'error'       => __( 'Error', 'abilityguard' ),
-			'rolled_back' => __( 'Rolled back', 'abilityguard' ),
+			'pending'     => __( 'Pending', 'abilityguard-mcp' ),
+			'approved'    => __( 'Approved', 'abilityguard-mcp' ),
+			'rejected'    => __( 'Rejected', 'abilityguard-mcp' ),
+			'ok'          => __( 'OK', 'abilityguard-mcp' ),
+			'error'       => __( 'Error', 'abilityguard-mcp' ),
+			'rolled_back' => __( 'Rolled back', 'abilityguard-mcp' ),
 		);
 
 		$page_url = admin_url( 'tools.php?page=' . AdminMenu::PAGE_SLUG );
@@ -86,13 +86,13 @@ final class DashboardWidget {
 		$p50 = isset( $timings['p50'] ) && null !== $timings['p50'] ? (int) $timings['p50'] : null;
 		$p95 = isset( $timings['p95'] ) && null !== $timings['p95'] ? (int) $timings['p95'] : null;
 		echo '<p style="margin:4px 0;">';
-		echo '<strong>' . esc_html__( 'Duration', 'abilityguard' ) . ':</strong> ';
+		echo '<strong>' . esc_html__( 'Duration', 'abilityguard-mcp' ) . ':</strong> ';
 		echo 'p50 ' . esc_html( null === $p50 ? '-' : $p50 . 'ms' ) . ' · ';
 		echo 'p95 ' . esc_html( null === $p95 ? '-' : $p95 . 'ms' );
 		echo '</p>';
 
 		if ( array() !== $top ) {
-			echo '<p style="margin:8px 0 4px;"><strong>' . esc_html__( 'Top abilities', 'abilityguard' ) . '</strong></p>';
+			echo '<p style="margin:8px 0 4px;"><strong>' . esc_html__( 'Top abilities', 'abilityguard-mcp' ) . '</strong></p>';
 			echo '<ol style="margin:0 0 0 18px;padding:0;">';
 			foreach ( $top as $row ) {
 				$name  = isset( $row['name'] ) ? (string) $row['name'] : '';
@@ -104,10 +104,10 @@ final class DashboardWidget {
 			}
 			echo '</ol>';
 		} else {
-			echo '<p style="color:#646970;"><em>' . esc_html__( 'No invocations yet.', 'abilityguard' ) . '</em></p>';
+			echo '<p style="color:#646970;"><em>' . esc_html__( 'No invocations yet.', 'abilityguard-mcp' ) . '</em></p>';
 		}
 
-		echo '<p style="margin-top:10px;"><a href="' . esc_url( $page_url ) . '">' . esc_html__( 'Open AbilityGuard →', 'abilityguard' ) . '</a></p>';
+		echo '<p style="margin-top:10px;"><a href="' . esc_url( $page_url ) . '">' . esc_html__( 'Open AbilityGuard →', 'abilityguard-mcp' ) . '</a></p>';
 		echo '</div>';
 	}
 }

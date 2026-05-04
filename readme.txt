@@ -62,7 +62,7 @@ Full plugin-author documentation lives at the GitHub repo: https://github.com/ib
 
 == Installation ==
 
-1. Upload the `abilityguard` folder to `/wp-content/plugins/`.
+1. Upload the `abilityguard-mcp` folder to `/wp-content/plugins/`.
 2. Activate the plugin through the Plugins menu in WordPress (or network-activate on multisite).
 3. Visit Tools > AbilityGuard to view the audit log.
 4. In your own plugin, register abilities via `wp_register_ability()` with a `safety` config.

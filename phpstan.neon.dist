@@ -5,7 +5,7 @@ parameters:
     level: 6
     paths:
         - src
-        - abilityguard.php
+        - abilityguard-mcp.php
         - examples
     bootstrapFiles:
         - stubs/abilities-api.php

@@ -15,18 +15,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION=$(grep -E "^ \* Version:" abilityguard.php | awk -F': +' '{print $2}' | tr -d ' ')
+VERSION=$(grep -E "^ \* Version:" abilityguard-mcp.php | awk -F': +' '{print $2}' | tr -d ' ')
 if [ -z "$VERSION" ]; then
-    echo "Could not read Version from abilityguard.php" >&2
+    echo "Could not read Version from abilityguard-mcp.php" >&2
     exit 1
 fi
 
 DIST="$ROOT/dist"
 STAGE="$DIST/stage"
-ZIP="$DIST/abilityguard-${VERSION}.zip"
+ZIP="$DIST/abilityguard-mcp-${VERSION}.zip"
 
 rm -rf "$DIST"
-mkdir -p "$STAGE/abilityguard"
+mkdir -p "$STAGE/abilityguard-mcp"
 
 echo "Building release for v${VERSION}..."
 
@@ -39,6 +39,8 @@ rsync -a \
     --exclude='.git' \
     --exclude='.github' \
     --exclude='.claude' \
+    --exclude='.playwright-mcp' \
+    --exclude='lab' \
     --exclude='node_modules' \
     --exclude='vendor' \
     --exclude='tests' \
@@ -55,15 +57,17 @@ rsync -a \
     --exclude='composer.lock' \
     --exclude='.gitignore' \
     --exclude='.gitattributes' \
+    --exclude='.gitmodules' \
     --exclude='.phpunit.cache' \
     --exclude='.editorconfig' \
     --exclude='Makefile' \
     --exclude='docs' \
     --exclude='README.md' \
     --exclude='assets/admin.jsx' \
-    ./ "$STAGE/abilityguard/"
+    --exclude='assets/admin.js.map' \
+    ./ "$STAGE/abilityguard-mcp/"
 
-(cd "$STAGE" && zip -rq "$ZIP" abilityguard)
+(cd "$STAGE" && zip -rq "$ZIP" abilityguard-mcp)
 rm -rf "$STAGE"
 
 echo "Built: $ZIP ($(du -h "$ZIP" | awk '{print $1}'), $(unzip -l "$ZIP" | tail -1 | awk '{print $2}') files)"
@@ -78,18 +82,17 @@ if [ "${1:-}" = "--check" ]; then
         echo "wp-env wordpress container not running, run 'wp-env start' first." >&2
         exit 1
     fi
-    SLUG="abilityguard-release-check"
-    echo "Running Plugin Check against $SLUG..."
+    SLUG="abilityguard-mcp-release-check"
+    echo "Running Plugin Check against $SLUG (release zip)..."
     docker exec "$CONTAINER" rm -rf "/var/www/html/wp-content/plugins/$SLUG"
     TMP=$(mktemp -d)
     unzip -q "$ZIP" -d "$TMP"
-    mv "$TMP/abilityguard" "$TMP/$SLUG"
+    mv "$TMP/abilityguard-mcp" "$TMP/$SLUG"
     docker cp "$TMP/$SLUG" "$CONTAINER:/var/www/html/wp-content/plugins/"
     rm -rf "$TMP"
     wp-env run cli wp plugin check "$SLUG" --format=table --fields=type,code,file,line --severity=5 || true
     docker exec "$CONTAINER" rm -rf "/var/www/html/wp-content/plugins/$SLUG"
     echo ""
-    echo "NOTE: Any 'WordPress.WP.I18n.TextDomainMismatch' errors are slug-test artifacts."
-    echo "      Text domain in code is 'abilityguard'; PCP is matching against the test slug '$SLUG'."
-    echo "      They vanish when installed at canonical slug 'abilityguard'."
+    echo "NOTE: Any 'WordPress.WP.I18n.TextDomainMismatch' findings against '$SLUG' are slug-test artifacts."
+    echo "      Real text domain in code is 'abilityguard-mcp'."
 fi
