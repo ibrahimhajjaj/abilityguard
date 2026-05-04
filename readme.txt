@@ -4,7 +4,7 @@ Tags: abilities-api, mcp, audit, rollback, safety
 Requires at least: 6.9
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 1.3.0
+Stable tag: 1.3.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -92,6 +92,12 @@ Per-surface MySQL advisory locks (GET_LOCK) serialise capture + execute so simul
 Yes. Redaction uses AES-256-GCM envelopes so rollback can still restore the original value when the encryption key is intact.
 
 == Changelog ==
+
+= 1.3.1 =
+* Slug renamed to `abilityguard-mcp` for the WordPress.org directory.
+* Snapshot file blobs now stored under `wp-uploads/abilityguard-mcp/` instead of `wp-content/abilityguard-staging/`.
+* Admin page CSS folded into the existing enqueued bundle; no more inline `<script>`/`<style>` echoes.
+* `$_SERVER['REMOTE_ADDR']` is unslashed and sanitized before being hashed for IP-keyed rate-limit principals.
 
 = 1.3.0 =
 * Sliding-window-counter rate limiter with multi-policy support (burst + sustained), pluggable storage (Redis / object cache / transient), and IETF draft RateLimit headers.

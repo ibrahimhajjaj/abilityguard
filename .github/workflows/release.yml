@@ -30,48 +30,25 @@ jobs:
       - name: Composer install (production)
         run: composer install --no-dev --prefer-dist --no-progress --optimize-autoloader
 
-      - name: Build admin bundle
-        run: npm install && npm run build
+      - name: Build release zip
+        run: bash scripts/build-release.sh
 
-      - name: Stage release tree
+      - name: Resolve zip path
+        id: zip
         run: |
-          mkdir -p dist/abilityguard
-          rsync -a \
-            --exclude='.git*' \
-            --exclude='.github' \
-            --exclude='.claude' \
-            --exclude='.phpunit.cache' \
-            --exclude='node_modules' \
-            --exclude='lab' \
-            --exclude='tests' \
-            --exclude='docs' \
-            --exclude='examples/.gitkeep' \
-            --exclude='package.json' \
-            --exclude='package-lock.json' \
-            --exclude='phpunit.xml.dist' \
-            --exclude='phpunit-integration.xml.dist' \
-            --exclude='phpcs.xml.dist' \
-            --exclude='phpcs.xml' \
-            --exclude='phpstan.neon.dist' \
-            --exclude='.wp-env.json' \
-            --exclude='scripts' \
-            --exclude='stubs' \
-            --exclude='dist' \
-            ./ dist/abilityguard/
-
-      - name: Create zip
-        working-directory: dist
-        run: zip -rq abilityguard.zip abilityguard
+          ZIP=$(ls dist/abilityguard-mcp-*.zip | head -1)
+          echo "path=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$ZIP" .zip)" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: abilityguard-${{ github.ref_name }}
-          path: dist/abilityguard.zip
+          name: ${{ steps.zip.outputs.name }}
+          path: ${{ steps.zip.outputs.path }}
           if-no-files-found: error
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/abilityguard.zip
+          files: ${{ steps.zip.outputs.path }}
