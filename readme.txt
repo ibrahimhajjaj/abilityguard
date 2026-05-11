@@ -1,20 +1,20 @@
-=== AbilityGuard ===
+=== Tessera for the Abilities API ===
 Contributors: ibrahimhajjaj
 Tags: abilities-api, mcp, audit, rollback, safety
 Requires at least: 6.9
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 1.3.2
+Stable tag: 1.3.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Snapshot, audit, and rollback middleware for the WordPress Abilities API.
+Snapshot, audit, and rollback layer for plugins that register abilities via the WordPress Abilities API.
 
 == Description ==
 
-AbilityGuard is a developer library for plugin authors who register abilities via `wp_register_ability()` and want snapshot capture, audit logging, approval workflows, and one-click rollback for every invocation across REST, MCP, internal PHP, and WP-CLI without building it themselves.
+Tessera is a developer library for plugin authors who register abilities via `wp_register_ability()` and want snapshot capture, audit logging, approval workflows, and one-click rollback for every invocation across REST, MCP, internal PHP, and WP-CLI without building it themselves.
 
-Declare what state your ability touches; AbilityGuard handles the safety wrapper.
+Declare what state your ability touches; Tessera handles the safety wrapper.
 
 = What you get out of the box =
 
@@ -33,7 +33,7 @@ Declare what state your ability touches; AbilityGuard handles the safety wrapper
 * **PHP API** with `wp_register_ability( $name, [ ..., 'safety' => [...] ] )` and helpers `abilityguard_rollback`, `abilityguard_snapshot_meta`, `abilityguard_snapshot_options`.
 * **REST**: `/abilityguard/v1/log`, `/log/<id>`, `/log/export`, `/rollback/<id>`, `/rollback/bulk`, `/approval`, `/approval/<id>/approve`, `/approval/<id>/reject`, `/approval/bulk`, `/approval/export`, `/retention`, `/retention/prune`, `/health`.
 * **WP-CLI**: `wp abilityguard log list/show`, `wp abilityguard rollback <id>`, `wp abilityguard approval list/approve/reject <id>`, `wp abilityguard prune`.
-* **wp-admin**: Tools > AbilityGuard. Hybrid timeline + command-palette search, snapshot drawer, JSON-highlighted Input/Result tabs, invocation chain navigation, and real rollback against the captured snapshot.
+* **wp-admin**: Tools > Tessera. Hybrid timeline + command-palette search, snapshot drawer, JSON-highlighted Input/Result tabs, invocation chain navigation, and real rollback against the captured snapshot.
 
 = Example =
 
@@ -60,11 +60,20 @@ wp_register_ability( 'my-plugin/update-product-price', array(
 
 Full plugin-author documentation lives at the GitHub repo: https://github.com/ibrahimhajjaj/abilityguard
 
+== Source Code ==
+
+The full source for Tessera, including the unminified React source for the admin app, lives on GitHub: https://github.com/ibrahimhajjaj/abilityguard
+
+* The admin bundle `assets/admin.js` is compiled from `assets/admin.jsx` (React + JSX, no preprocessor magic beyond JSX).
+* The bundler is [esbuild](https://esbuild.github.io/), configured in `scripts/build.mjs`.
+* To rebuild the admin bundle from a fresh checkout, run `npm install` once, then `npm run build` whenever `assets/admin.jsx` changes. This regenerates `assets/admin.js` in place.
+* The release zip published to the WordPress.org directory is produced by `scripts/build-release.sh`, which excludes development artifacts (tests, examples, build configs) but keeps everything required for the plugin to run.
+
 == Installation ==
 
 1. Upload the `abilityguard-mcp` folder to `/wp-content/plugins/`.
 2. Activate the plugin through the Plugins menu in WordPress (or network-activate on multisite).
-3. Visit Tools > AbilityGuard to view the audit log.
+3. Visit Tools > Tessera to view the audit log.
 4. In your own plugin, register abilities via `wp_register_ability()` with a `safety` config.
 
 Requires WordPress 6.9 or later (for the Abilities API) and PHP 8.1 or later.
@@ -92,6 +101,11 @@ Per-surface MySQL advisory locks (GET_LOCK) serialise capture + execute so simul
 Yes. Redaction uses AES-256-GCM envelopes so rollback can still restore the original value when the encryption key is intact.
 
 == Changelog ==
+
+= 1.3.3 =
+* Display name changed to "Tessera for the Abilities API" to clearly distinguish this plugin from any future official safety library. Slug, text domain, and internal namespace are unchanged.
+* `error_log()` calls in the rate-limiter and concurrency lock are now gated behind `WP_DEBUG`, so production hosts no longer accumulate noise from fail-open paths.
+* `readme.txt` gains a Source Code section documenting the GitHub repository, the esbuild-based build pipeline, and the `npm run build` command used to regenerate `assets/admin.js`.
 
 = 1.3.2 =
 * Slug renamed to `abilityguard-mcp` for the WordPress.org directory.

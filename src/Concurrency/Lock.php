@@ -76,13 +76,15 @@ final class Lock {
 		if ( null === $result ) {
 			// NULL means an error occurred (e.g. misconfigured MySQL).
 			// Log and proceed without the lock (degraded mode).
-			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-			error_log(
-				sprintf(
-					'AbilityGuard: GET_LOCK() returned NULL for key "%s". Proceeding without lock.',
-					$key
-				)
-			);
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				error_log(
+					sprintf(
+						'AbilityGuard: GET_LOCK() returned NULL for key "%s". Proceeding without lock.',
+						$key
+					)
+				);
+			}
 			return false;
 		}
 

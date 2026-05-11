@@ -184,7 +184,9 @@ final class RateLimiter {
 			} catch ( Throwable $e ) {
 				// Fail-open (Stripe pattern). A throwing backend must not
 				// block the call; log and admit this policy.
-				error_log( sprintf( 'AbilityGuard rate limiter storage error: %s', $e->getMessage() ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					error_log( sprintf( 'AbilityGuard rate limiter storage error: %s', $e->getMessage() ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				}
 				continue;
 			}
 
@@ -210,7 +212,9 @@ final class RateLimiter {
 				$new_curr       = self::storage()->increment( $key, $ttl );
 				$counts['curr'] = $new_curr;
 			} catch ( Throwable $e ) {
-				error_log( sprintf( 'AbilityGuard rate limiter storage error: %s', $e->getMessage() ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					error_log( sprintf( 'AbilityGuard rate limiter storage error: %s', $e->getMessage() ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				}
 			}
 
 			$post_estimate = Window::estimate( $counts['prev'], $counts['curr'], $now, $policy->window );

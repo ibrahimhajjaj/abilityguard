@@ -188,7 +188,7 @@ function isTruncatedMarker(val) {
 function EncryptedBadge() {
   return (
     <span
-      title="Encrypted via AbilityGuard. Decryptable on rollback."
+      title="Encrypted via Tessera. Decryptable on rollback."
       style={{
         display: "inline-flex", alignItems: "center", gap: 3,
         background: "var(--neutral-bg)", border: "1px solid var(--border)",
@@ -904,7 +904,7 @@ function ListScreen({ store }) {
       <div className="hy-shell">
         <header className="hy-top">
           <div>
-            <div className="eyebrow">AbilityGuard · Audit log</div>
+            <div className="eyebrow">Tessera · Audit log</div>
             <h1 className="hy-title">Activity</h1>
             <p className="hy-sub">{store.rows.length.toLocaleString()} invocations · {store.rows.filter(r => r.status === "err").length} errors · {store.rows.filter(r => r.status === "rolled").length} rolled back · {allGroups.length} days</p>
           </div>
@@ -1915,7 +1915,7 @@ function DetailScreen({ store }) {
         <header className="hy-top hy-top-sm">
           <div style={{ minWidth: 0 }}>
             <div className="hy-crumb">
-              <a href="#" onClick={(e) => { e.preventDefault(); store.setView({ name: "list", id: null }); }}>AbilityGuard</a>
+              <a href="#" onClick={(e) => { e.preventDefault(); store.setView({ name: "list", id: null }); }}>Tessera</a>
               <span className="dim">/</span>
               <a href="#" onClick={(e) => { e.preventDefault(); store.setView({ name: "list", id: null }); }}>Activity</a>
               <span className="dim">/</span>

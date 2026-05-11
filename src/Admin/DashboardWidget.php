@@ -46,7 +46,7 @@ final class DashboardWidget {
 		}
 		wp_add_dashboard_widget(
 			self::WIDGET_ID,
-			__( 'AbilityGuard', 'abilityguard-mcp' ),
+			__( 'Tessera', 'abilityguard-mcp' ),
 			array( __CLASS__, 'render' )
 		);
 	}
@@ -107,7 +107,7 @@ final class DashboardWidget {
 			echo '<p style="color:#646970;"><em>' . esc_html__( 'No invocations yet.', 'abilityguard-mcp' ) . '</em></p>';
 		}
 
-		echo '<p style="margin-top:10px;"><a href="' . esc_url( $page_url ) . '">' . esc_html__( 'Open AbilityGuard →', 'abilityguard-mcp' ) . '</a></p>';
+		echo '<p style="margin-top:10px;"><a href="' . esc_url( $page_url ) . '">' . esc_html__( 'Open Tessera →', 'abilityguard-mcp' ) . '</a></p>';
 		echo '</div>';
 	}
 }

@@ -49,8 +49,8 @@ final class AdminMenu {
 	public static function register_menu(): void {
 		$hook = add_submenu_page(
 			'tools.php',
-			__( 'AbilityGuard', 'abilityguard-mcp' ),
-			__( 'AbilityGuard', 'abilityguard-mcp' ),
+			__( 'Tessera', 'abilityguard-mcp' ),
+			__( 'Tessera', 'abilityguard-mcp' ),
 			self::CAPABILITY,
 			self::PAGE_SLUG,
 			array( __CLASS__, 'render_page' )
@@ -101,7 +101,7 @@ final class AdminMenu {
 	 */
 	public static function render_build_missing_notice(): void {
 		echo '<div class="notice notice-error"><p>';
-		echo esc_html__( 'AbilityGuard admin bundle not built. Run `npm install && npm run build` from the plugin directory.', 'abilityguard-mcp' );
+		echo esc_html__( 'Tessera admin bundle not built. Run `npm install && npm run build` from the plugin directory.', 'abilityguard-mcp' );
 		echo '</p></div>';
 	}
 
