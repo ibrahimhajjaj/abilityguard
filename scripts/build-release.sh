@@ -35,6 +35,11 @@ if [ ! -f assets/admin.js ] || [ assets/admin.jsx -nt assets/admin.js ]; then
     npm run build
 fi
 
+# Production composer install so vendor/autoload.php (PSR-4) ships in the zip.
+# Without this the plugin fatal's on activation: no autoloader, no
+# AbilityGuard\Installer, no boot.
+composer install --no-dev --prefer-dist --no-progress --optimize-autoloader --quiet
+
 rsync -a \
     --exclude='.git' \
     --exclude='.github' \
@@ -42,7 +47,6 @@ rsync -a \
     --exclude='.playwright-mcp' \
     --exclude='lab' \
     --exclude='node_modules' \
-    --exclude='vendor' \
     --exclude='tests' \
     --exclude='examples' \
     --exclude='stubs' \

@@ -3,7 +3,7 @@
  * Plugin Name:       Tessera for the Abilities API
  * Plugin URI:        https://github.com/ibrahimhajjaj/abilityguard
  * Description:       Snapshot, audit, and rollback layer for plugins that register abilities via the WordPress Abilities API.
- * Version:           1.3.3
+ * Version:           1.3.4
  * Requires at least: 6.9
  * Requires PHP:      8.1
  * Network:           true
@@ -20,7 +20,7 @@ declare( strict_types=1 );
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'ABILITYGUARD_VERSION', '1.3.3' );
+define( 'ABILITYGUARD_VERSION', '1.3.4' );
 define( 'ABILITYGUARD_FILE', __FILE__ );
 define( 'ABILITYGUARD_DIR', plugin_dir_path( __FILE__ ) );
 define( 'ABILITYGUARD_URL', plugin_dir_url( __FILE__ ) );
