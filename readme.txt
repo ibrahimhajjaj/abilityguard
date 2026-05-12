@@ -4,7 +4,7 @@ Tags: abilities-api, mcp, audit, rollback, safety
 Requires at least: 6.9
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 1.3.4
+Stable tag: 1.3.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -100,7 +100,23 @@ Per-surface MySQL advisory locks (GET_LOCK) serialise capture + execute so simul
 
 Yes. Redaction uses AES-256-GCM envelopes so rollback can still restore the original value when the encryption key is intact.
 
+== Screenshots ==
+
+1. Invocation timeline. Every ability call across REST, MCP, internal PHP, and WP-CLI, with caller attribution and per-row status.
+2. Approvals queue. Pending requests waiting on a human, with the requesting context and a one-click approve or reject.
+3. Invocation detail after a one-click rollback restored the captured pre-state.
+4. Search-as-you-type in the log: ability name, caller, status.
+5. Invocation detail, result tab, with redacted secret values restored on display when the encryption key is present.
+6. Snapshot drawer showing the captured pre-state and post-state for a destructive invocation.
+7. Multi-stage approval chain with per-stage capability and role routing.
+
 == Changelog ==
+
+= 1.3.5 =
+* Release zip no longer ships `composer/installers` and its unused installer adapters. Cuts the published zip from 909K to 824K and 206 files to 98.
+
+= 1.3.4 =
+* Release zip now ships `vendor/autoload.php` so the plugin actually boots on a fresh install. (1.3.3 zip was missing the autoloader and fatal'd on activation.)
 
 = 1.3.3 =
 * Display name changed to "Tessera for the Abilities API" to clearly distinguish this plugin from any future official safety library. Slug, text domain, and internal namespace are unchanged.
