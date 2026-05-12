@@ -78,7 +78,7 @@ final class CoreFilterBridge {
 	}
 
 	/**
-	 * wp_pre_execute_ability handler.
+	 * Handles wp_pre_execute_ability.
 	 *
 	 * Returns $pre unchanged unless we're going to short-circuit the call
 	 * with an approval-pending envelope.
@@ -90,7 +90,7 @@ final class CoreFilterBridge {
 	 *
 	 * @return mixed Original $pre, or WP_Error 202 envelope on short-circuit.
 	 */
-	public function on_pre_execute( $pre, string $ability_name, mixed $input, WP_Ability $ability ): mixed {
+	public function on_pre_execute( $pre, string $ability_name, mixed $input, WP_Ability $ability ): mixed { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- $ability is part of the filter signature.
 		// Sentinel test: core seeds $pre with a fresh stdClass per call.
 		// If a higher-priority filter already short-circuited with a real
 		// value (anything not stdClass), respect their decision.
@@ -141,7 +141,7 @@ final class CoreFilterBridge {
 	}
 
 	/**
-	 * wp_ability_execute_result handler.
+	 * Handles wp_ability_execute_result.
 	 *
 	 * Captures the post-snapshot then re-fires
 	 * abilityguard_post_execute_result with the observer's context, so
@@ -155,7 +155,7 @@ final class CoreFilterBridge {
 	 *
 	 * @return mixed Possibly-transformed result from post_execute_result subscribers.
 	 */
-	public function on_execute_result( mixed $result, string $ability_name, mixed $input, WP_Ability $ability ): mixed {
+	public function on_execute_result( mixed $result, string $ability_name, mixed $input, WP_Ability $ability ): mixed { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- $ability is part of the filter signature.
 		$ctx = InvocationContext::find_for( $ability_name );
 		if ( null === $ctx ) {
 			return $result;

@@ -112,8 +112,8 @@ final class CoreFilterBridgeTest extends WP_UnitTestCase {
 	}
 
 	/**
-	 * wp_ability_execute_result fires abilityguard_post_execute_result, with
-	 * the wrap stepping out of its own dispatch (no double-fire).
+	 * The wp_ability_execute_result handler fires abilityguard_post_execute_result,
+	 * with the wrap stepping out of its own dispatch (no double-fire).
 	 */
 	public function test_execute_result_filter_re_fires_post_execute_result_exactly_once(): void {
 		$post_fired      = 0;

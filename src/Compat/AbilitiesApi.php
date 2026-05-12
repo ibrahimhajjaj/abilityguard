@@ -45,8 +45,16 @@ final class AbilitiesApi {
 			return self::$cached_has_lifecycle_filters;
 		}
 
+		self::$cached_has_lifecycle_filters = self::probe();
+		return self::$cached_has_lifecycle_filters;
+	}
+
+	/**
+	 * Uncached source-scan probe.
+	 */
+	private static function probe(): bool {
 		if ( ! class_exists( 'WP_Ability' ) ) {
-			return self::$cached_has_lifecycle_filters = false;
+			return false;
 		}
 
 		try {
@@ -55,16 +63,16 @@ final class AbilitiesApi {
 			$start = $rm->getStartLine();
 			$end   = $rm->getEndLine();
 			if ( ! is_string( $file ) || ! is_readable( $file ) || $start < 1 || $end < $start ) {
-				return self::$cached_has_lifecycle_filters = false;
+				return false;
 			}
 			$lines = file( $file, FILE_IGNORE_NEW_LINES );
 			if ( false === $lines ) {
-				return self::$cached_has_lifecycle_filters = false;
+				return false;
 			}
 			$body = implode( "\n", array_slice( $lines, $start - 1, $end - $start + 1 ) );
-			return self::$cached_has_lifecycle_filters = ( false !== strpos( $body, "'wp_pre_execute_ability'" ) );
+			return false !== strpos( $body, "'wp_pre_execute_ability'" );
 		} catch ( Throwable $e ) {
-			return self::$cached_has_lifecycle_filters = false;
+			return false;
 		}
 	}
 
