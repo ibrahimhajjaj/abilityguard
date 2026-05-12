@@ -245,45 +245,52 @@ final class AbilityWrapper {
 			// so the filter has something to compare against; the after-hook
 			// listener will harmlessly overwrite the same post_state_json if
 			// it still fires (DryRun marks ctx->completed to short it out).
-			if ( null !== ( $ctx->snapshot['snapshot_id'] ?? null ) ) {
-				$this->snapshots->capture_post( (int) $ctx->snapshot['snapshot_id'], $this->safety, $input );
-			}
+			//
+			// On 7.1+ this is owned by CoreFilterBridge::on_execute_result,
+			// firing from wp_ability_execute_result inside do_execute(). We
+			// skip both the capture and the filter dispatch here to avoid
+			// double work + double-fire.
+			if ( ! CoreFilterBridge::is_registered() ) {
+				if ( null !== ( $ctx->snapshot['snapshot_id'] ?? null ) ) {
+					$this->snapshots->capture_post( (int) $ctx->snapshot['snapshot_id'], $this->safety, $input );
+				}
 
-			/**
-			 * Filters the result returned from the wrapped execute_callback
-			 * after the post-snapshot has been captured. Returning a
-			 * transformed value lets follow-up plugins (DryRun) wrap the
-			 * result in an envelope and trigger side effects like
-			 * auto-rollback. Implementations that complete the audit row +
-			 * mark $ctx->completed prevent the after-hook listener from
-			 * double-writing.
-			 *
-			 * @since 1.3.0
-			 *
-			 * @param mixed                $result       The execute result.
-			 * @param string               $ability_name Ability name.
-			 * @param mixed                $input        Input passed to execute.
-			 * @param array<string, mixed> $context      invocation_id, log_id,
-			 *                                           snapshot_id, caller_type,
-			 *                                           caller_id, destructive,
-			 *                                           safety, duration_ms.
-			 */
-			$result = apply_filters(
-				'abilityguard_post_execute_result',
-				$result,
-				$this->ability_name,
-				$input,
-				array(
-					'invocation_id' => $ctx->invocation_id,
-					'log_id'        => $ctx->log_id,
-					'snapshot_id'   => (int) ( $ctx->snapshot['snapshot_id'] ?? 0 ),
-					'caller_type'   => $ctx->caller_type,
-					'caller_id'     => $ctx->caller_id,
-					'destructive'   => $destructive,
-					'safety'        => $this->safety,
-					'duration_ms'   => $duration_ms,
-				)
-			);
+				/**
+				 * Filters the result returned from the wrapped execute_callback
+				 * after the post-snapshot has been captured. Returning a
+				 * transformed value lets follow-up plugins (DryRun) wrap the
+				 * result in an envelope and trigger side effects like
+				 * auto-rollback. Implementations that complete the audit row +
+				 * mark $ctx->completed prevent the after-hook listener from
+				 * double-writing.
+				 *
+				 * @since 1.3.0
+				 *
+				 * @param mixed                $result       The execute result.
+				 * @param string               $ability_name Ability name.
+				 * @param mixed                $input        Input passed to execute.
+				 * @param array<string, mixed> $context      invocation_id, log_id,
+				 *                                           snapshot_id, caller_type,
+				 *                                           caller_id, destructive,
+				 *                                           safety, duration_ms.
+				 */
+				$result = apply_filters(
+					'abilityguard_post_execute_result',
+					$result,
+					$this->ability_name,
+					$input,
+					array(
+						'invocation_id' => $ctx->invocation_id,
+						'log_id'        => $ctx->log_id,
+						'snapshot_id'   => (int) ( $ctx->snapshot['snapshot_id'] ?? 0 ),
+						'caller_type'   => $ctx->caller_type,
+						'caller_id'     => $ctx->caller_id,
+						'destructive'   => $destructive,
+						'safety'        => $this->safety,
+						'duration_ms'   => $duration_ms,
+					)
+				);
+			}
 			return $result;
 		} finally {
 			if ( null !== $lock_key && ! $lock_inherited ) {

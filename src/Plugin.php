@@ -45,7 +45,12 @@ final class Plugin {
 		$registration = new Registry\RegistrationFilter( $snapshots, $audit );
 		$registration->register();
 
-		( new Registry\InvocationObserver( $snapshots, $audit ) )->register();
+		$observer = new Registry\InvocationObserver( $snapshots, $audit );
+		$observer->register();
+
+		if ( Compat\AbilitiesApi::has_lifecycle_filters() ) {
+			( new Registry\CoreFilterBridge( $observer, $snapshots ) )->register();
+		}
 
 		Safety\DryRun::register();
 		Safety\RateLimiter::register();

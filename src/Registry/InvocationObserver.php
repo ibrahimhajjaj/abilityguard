@@ -101,6 +101,108 @@ final class InvocationObserver {
 	}
 
 	/**
+	 * Open a pending-approval audit row directly, bypassing the placeholder-
+	 * then-patch pattern that on_before uses for the normal path.
+	 *
+	 * CoreFilterBridge calls this from wp_pre_execute_ability on 7.1+ hosts:
+	 * the pre-execute short-circuit aborts BEFORE wp_before_execute_ability
+	 * fires, so on_before never runs and we have to write the pending row
+	 * inline here.
+	 *
+	 * @param string $ability_name Ability name.
+	 * @param mixed  $input        Raw input passed to execute().
+	 *
+	 * @return array{invocation_id: string, log_id: int, snapshot: array<string, mixed>|null}|array{}
+	 *         Empty array when no safety registered (caller should pass through);
+	 *         otherwise the prepared identifiers for ApprovalService::request().
+	 */
+	public function open_pending_invocation_for_approval( string $ability_name, mixed $input ): array {
+		$safety = self::$safety_by_ability[ $ability_name ] ?? null;
+		if ( null === $safety ) {
+			return array();
+		}
+
+		$invocation_id = InvocationHelpers::uuid4();
+		$parent_id     = InvocationStack::current();
+		$caller_type   = InvocationHelpers::detect_caller_type();
+		$caller_id     = McpContext::current();
+		$user_id       = InvocationHelpers::current_user_id();
+
+		// Pre-snapshot: the eventual approval execution will diff against
+		// this for drift detection, so we have to capture it now even
+		// though the call is parked.
+		$snapshot = $this->snapshots->capture( $invocation_id, $safety, $input );
+
+		$args_shape = InvocationHelpers::shape_for_log(
+			$safety,
+			$input,
+			'input',
+			'args',
+			'abilityguard_max_args_bytes',
+			65536
+		);
+
+		$log_id = $this->audit->log(
+			array(
+				'invocation_id'        => $invocation_id,
+				'parent_invocation_id' => $parent_id,
+				'ability_name'         => $ability_name,
+				'caller_type'          => $caller_type,
+				'caller_id'            => $caller_id,
+				'user_id'              => $user_id,
+				'args_json'            => $args_shape['json'],
+				'result_json'          => null,
+				'status'               => 'pending',
+				'destructive'          => (bool) ( $safety['destructive'] ?? false ),
+				'duration_ms'          => 0,
+				'pre_hash'             => $snapshot['pre_hash'] ?? null,
+				'post_hash'            => null,
+				'snapshot_id'          => $snapshot['snapshot_id'] ?? null,
+			)
+		);
+
+		if ( $args_shape['truncated'] ) {
+			InvocationHelpers::maybe_doing_it_wrong( $ability_name );
+		}
+
+		if ( $log_id > 0 && ! empty( $safety['skip_drift_check'] ) ) {
+			LogMeta::set( $log_id, 'skip_drift_check', '1' );
+		}
+
+		/**
+		 * Fires immediately before the call is parked for approval.
+		 *
+		 * Mirrors the on_before action payload so notification plugins
+		 * subscribed to abilityguard_invocation_started keep firing on
+		 * 7.1+ hosts where the call short-circuits before on_before.
+		 *
+		 * @since 1.4.0
+		 *
+		 * @param string $invocation_id UUID.
+		 * @param string $ability_name  Ability name.
+		 * @param mixed  $input         Input (un-redacted).
+		 * @param array<string, mixed> $context destructive, snapshot_id, caller_type.
+		 */
+		do_action(
+			'abilityguard_invocation_started',
+			$invocation_id,
+			$ability_name,
+			$input,
+			array(
+				'destructive' => (bool) ( $safety['destructive'] ?? false ),
+				'snapshot_id' => (int) ( $snapshot['snapshot_id'] ?? 0 ),
+				'caller_type' => $caller_type,
+			)
+		);
+
+		return array(
+			'invocation_id' => $invocation_id,
+			'log_id'        => (int) $log_id,
+			'snapshot'      => $snapshot,
+		);
+	}
+
+	/**
 	 * Listener: wp_before_execute_ability.
 	 *
 	 * @param string $ability_name Ability name.
