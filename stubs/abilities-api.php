@@ -26,6 +26,15 @@ if ( ! function_exists( 'wp_get_ability' ) ) {
 	function wp_get_ability( string $name ) {}
 }
 
+if ( ! class_exists( 'WP_Filter_Sentinel' ) ) {
+	/**
+	 * Marker object used as a filter's default value when any user value must
+	 * remain distinguishable from the "no filter modified this" case.
+	 * Added in wordpress-develop#11731, ships with WP 7.1.
+	 */
+	final class WP_Filter_Sentinel {}
+}
+
 if ( ! class_exists( 'WP_Error' ) ) {
 	class WP_Error {
 		/** @param string|int $code

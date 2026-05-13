@@ -13,9 +13,9 @@ defined( 'ABSPATH' ) || exit;
 
 use AbilityGuard\Approval\ApprovalService;
 use AbilityGuard\Contracts\SnapshotServiceInterface;
-use stdClass;
 use WP_Ability;
 use WP_Error;
+use WP_Filter_Sentinel;
 
 /**
  * Bridges AbilityGuard onto the WP 7.1 execution lifecycle filters added in
@@ -91,10 +91,11 @@ final class CoreFilterBridge {
 	 * @return mixed Original $pre, or WP_Error 202 envelope on short-circuit.
 	 */
 	public function on_pre_execute( $pre, string $ability_name, mixed $input, WP_Ability $ability ): mixed { // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- $ability is part of the filter signature.
-		// Sentinel test: core seeds $pre with a fresh stdClass per call.
-		// If a higher-priority filter already short-circuited with a real
-		// value (anything not stdClass), respect their decision.
-		if ( ! ( $pre instanceof stdClass ) ) {
+		// Sentinel test: core seeds $pre with a fresh WP_Filter_Sentinel per
+		// call (see wordpress-develop#11731). Anything that is not a
+		// WP_Filter_Sentinel means a higher-priority filter already
+		// short-circuited; pass through and respect that.
+		if ( ! ( $pre instanceof WP_Filter_Sentinel ) ) {
 			return $pre;
 		}
 
